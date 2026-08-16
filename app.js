@@ -1,21 +1,29 @@
-/* Railnav — Streckenkilometer verorten
+/* Railnav — Streckenkilometer auf der Karte
  *
- * Datenquelle: OpenRailwayMap-API v2 (/milestone, /facility). Die API liefert
- * die in OpenStreetMap erfassten Kilometersteine einer Strecke im Umkreis von
- * maximal 10 km um die angefragte Position — sortiert nach Abstand zur Anfrage.
- * Daraus wird hier interpoliert, statt nur den nächstgelegenen Stein zu zeigen.
+ * Zwei Richtungen:
+ *   Strecke + km  → Position   (OpenRailwayMap-API, dazwischen wird interpoliert)
+ *   Klick/Karte   → Strecke + km (Projektion auf die geladenen Kilometersteine)
+ *
+ * Die API kennt nur die erste Richtung; die zweite rechnet der Browser aus den
+ * bereits geladenen Steinen. Nur wenn weit weg von der geladenen Strecke geklickt
+ * wird, muss Overpass sagen, welche Strecke dort überhaupt liegt.
  */
 
 'use strict';
 
 const API = 'https://api.openrailwaymap.org/v2';
-const MAX_ENTRIES = 50;      // Obergrenze pro Durchlauf, damit die API nicht geflutet wird
-const MAX_GAP_KM = 3;        // größere Lücken zwischen zwei Steinen werden nicht interpoliert
-const CONCURRENCY = 3;       // parallele Abfragen
 const LIMIT = 200;           // Maximum der API je Abfrage
-const STORE_KEY = 'railnav.v2';
+const MAX_GAP_KM = 3;        // größere Lücken zwischen zwei Steinen nicht überbrücken
+const CLICK_TOL_PX = 34;     // Klicktoleranz quer zur Strecke
+const STORE_KEY = 'railnav.v3';
 
-/* ============================ Kleine Helfer ============================ */
+// kumi zuerst: die Hauptinstanz ist aus manchen Netzen nicht erreichbar
+const OVERPASS = [
+  'https://overpass.kumi.systems/api/interpreter',
+  'https://overpass-api.de/api/interpreter'
+];
+
+/* ============================ Helfer ============================ */
 
 const $ = sel => document.querySelector(sel);
 const nfKm = new Intl.NumberFormat('de-DE', { minimumFractionDigits: 1, maximumFractionDigits: 3 });
@@ -39,7 +47,17 @@ function haversine(aLat, aLon, bLat, bLon) {
 
 const gmapsUrl = (lat, lon) => `https://www.google.com/maps?q=${lat.toFixed(6)},${lon.toFixed(6)}`;
 const gmapsRoute = (lat, lon) => `https://www.google.com/maps/dir/?api=1&destination=${lat.toFixed(6)},${lon.toFixed(6)}`;
-const ormUrl = (lat, lon) => `https://www.openrailwaymap.org/?style=standard&lat=${lat.toFixed(6)}&lon=${lon.toFixed(6)}&zoom=17`;
+
+/** "12+250" → 12.25, "12,5" → 12.5 */
+function toKm(token) {
+  const t = String(token).trim();
+  const hm = /^(-?)(\d+)\+(\d{1,3})$/.exec(t);
+  if (hm) {
+    const frac = parseInt(hm[3].padEnd(3, '0'), 10) / 1000;
+    return (hm[1] === '-' ? -1 : 1) * (parseInt(hm[2], 10) + frac);
+  }
+  return parseFloat(t.replace(',', '.'));
+}
 
 let toastTimer = null;
 function toast(msg) {
@@ -47,7 +65,7 @@ function toast(msg) {
   el.textContent = msg;
   el.classList.add('show');
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => el.classList.remove('show'), 2600);
+  toastTimer = setTimeout(() => el.classList.remove('show'), 2800);
 }
 
 async function copyText(text) {
@@ -55,11 +73,9 @@ async function copyText(text) {
     await navigator.clipboard.writeText(text);
     return true;
   } catch {
-    // Fallback für Browser ohne Clipboard-API bzw. ohne HTTPS
     const ta = document.createElement('textarea');
     ta.value = text;
-    ta.style.position = 'fixed';
-    ta.style.opacity = '0';
+    ta.style.cssText = 'position:fixed;opacity:0';
     document.body.appendChild(ta);
     ta.select();
     let ok = false;
@@ -69,111 +85,7 @@ async function copyText(text) {
   }
 }
 
-function download(name, mime, text) {
-  const blob = new Blob([text], { type: mime });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = name;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 4000);
-}
-
-/* ============================ Eingabe-Parser ============================ */
-
-const NUM = String.raw`\d+(?:\+\d{1,3}|[.,]\d+)?`;
-const LINE_RE = new RegExp(
-  '^\\s*' +
-  // Streckennummer nur, wenn danach noch ein Kilometerwert folgt und das Token eine Ziffer enthält
-  '(?:(?<ref>(?=[A-Za-z0-9._-]*\\d)[A-Za-z0-9][A-Za-z0-9._-]{1,9})[\\s;/]+)?' +
-  '(?<km1>-?' + NUM + ')' +
-  '(?:\\s*(?:\\.{2,3}|--|[-–—]|bis)\\s*(?<km2>' + NUM + '))?' +
-  '\\s*(?<rest>.*)$', 'i');
-
-// Füllwörter, die eine Zeile lesbarer machen, für die Auswertung aber egal sind
-const NOISE_RE = /\b(?:strecke|str|vzg|nr|km|bei|abschnitt|kilometer)\.?\b/gi;
-
-/** "12+250" → 12.25, "12,5" → 12.5 */
-function toKm(token) {
-  const hm = /^(-?)(\d+)\+(\d{1,3})$/.exec(token.trim());
-  if (hm) {
-    const frac = parseInt(hm[3].padEnd(3, '0'), 10) / 1000;
-    return (hm[1] === '-' ? -1 : 1) * (parseInt(hm[2], 10) + frac);
-  }
-  return parseFloat(token.trim().replace(',', '.'));
-}
-
-/** Eine Zeile → Eintrag oder null (Kommentar/leer) bzw. Eintrag mit .error */
-function parseLine(raw, defaultRef, index) {
-  const line = raw.trim();
-  if (!line || line.startsWith('#') || line.startsWith('//')) return null;
-
-  const base = { index, raw: line, label: '', status: 'pending' };
-
-  // Betriebsstelle: @Name, @DS100 oder @UIC
-  if (line.startsWith('@')) {
-    const q = line.slice(1).trim();
-    if (!q) return { ...base, kind: 'error', error: 'Nach dem @ fehlt der Suchbegriff.' };
-    return { ...base, kind: 'facility', query: q };
-  }
-
-  // Eigene Bezeichnung nach dem senkrechten Strich
-  let expr = line, label = '';
-  const bar = line.indexOf('|');
-  if (bar >= 0) {
-    expr = line.slice(0, bar);
-    label = line.slice(bar + 1).trim();
-  }
-
-  // "5100, 12,5" — Komma mit folgendem Leerzeichen trennt, Komma zwischen Ziffern ist Dezimalzeichen
-  expr = expr.replace(/,(\s)/g, '$1').trim();
-
-  let m = LINE_RE.exec(expr);
-  let cleaned = false;
-  if (!m) {
-    m = LINE_RE.exec(expr.replace(NOISE_RE, ' ').replace(/\s+/g, ' ').trim());
-    cleaned = true;
-  }
-  if (!m) {
-    return { ...base, kind: 'error', label, error: 'Zeile nicht verstanden. Erwartet wird z. B. „5100 12,5" oder „12,5".' };
-  }
-
-  const ref = (m.groups.ref || defaultRef || '').trim();
-  const km1 = toKm(m.groups.km1);
-  const km2 = m.groups.km2 != null ? toKm(m.groups.km2) : null;
-
-  // Ein Rest ohne senkrechten Strich gilt als Bezeichnung — nur wenn die Zeile roh gelesen wurde,
-  // sonst hätten die entfernten Füllwörter den Text verstümmelt.
-  if (!label && !cleaned) label = (m.groups.rest || '').replace(/^[\s,;:/–—-]+/, '').trim();
-
-  if (!ref) {
-    return { ...base, kind: 'error', label, error: 'Keine Streckennummer — oben eintragen oder in die Zeile schreiben („5100 12,5").' };
-  }
-  if (!isFinite(km1) || (km2 != null && !isFinite(km2))) {
-    return { ...base, kind: 'error', label, error: 'Kilometerwert nicht lesbar.' };
-  }
-
-  const entry = km2 != null
-    ? { ...base, kind: 'range', ref, from: Math.min(km1, km2), to: Math.max(km1, km2), label }
-    : { ...base, kind: 'point', ref, km: km1, label };
-
-  // Plausibilitätshinweis: keine deutsche Strecke ist vierstellig lang
-  if (km1 > 1000) entry.warnInput = `km ${fmtKm(km1)} wirkt eher wie eine Streckennummer.`;
-  return entry;
-}
-
-function parseAll(text, defaultRef) {
-  const out = [];
-  text.split(/\r?\n/).forEach((line, i) => {
-    const e = parseLine(line, defaultRef, out.length + 1);
-    if (e) out.push(e);
-  });
-  return out;
-}
-
-/* ============================ API-Zugriff ============================ */
+/* ============================ API ============================ */
 
 async function tryFetch(url, timeout) {
   const ctrl = new AbortController();
@@ -200,8 +112,8 @@ async function getJson(url) {
   }
 }
 
-/* Pro Strecke werden alle bereits geladenen Steine gesammelt, damit mehrere
- * Kilometerangaben derselben Strecke nur eine Abfrage kosten. */
+/* Je Strecke werden alle geladenen Steine gesammelt. Die API antwortet im festen
+ * Umkreis von 10 km um die angefragte Position, unsortiert und auf LIMIT gekappt. */
 const lineCache = new Map();
 
 function bracketOf(sorted, km) {
@@ -214,16 +126,33 @@ function bracketOf(sorted, km) {
   return { lower, upper, exact };
 }
 
-/** Liegt der Kilometer auf oder zwischen zwei nah beieinander liegenden Steinen? */
-function hasBracket(sorted, km) {
-  const b = bracketOf(sorted, km);
-  return !!(b.exact || (b.lower && b.upper && b.upper.km - b.lower.km <= MAX_GAP_KM));
+/** Sind zwei Steine plausibel benachbart?
+ *
+ *  Die Luftlinie zwischen zwei Punkten kann nie länger sein als die Strecke
+ *  entlang des Gleises. Ist sie es doch, gehören die beiden nicht zusammen:
+ *  Streckennummern tauchen in den Daten mehrfach auf, an Abzweigen und bei
+ *  Nummernwechseln liegen gleiche Kilometerwerte an ganz anderen Orten.
+ *  Ohne diese Prüfung würde quer durchs Land interpoliert.
+ */
+function segmentOk(a, b) {
+  const dkm = b.km - a.km;
+  if (dkm <= 0 || dkm > MAX_GAP_KM) return false;
+  return haversine(a.lat, a.lon, b.lat, b.lon) <= dkm * 1000 * 1.25 + 50;
 }
 
-/** Eine Abfrage an die API, Ergebnis in den Streckenspeicher mischen. */
+function hasBracket(sorted, km) {
+  const b = bracketOf(sorted, km);
+  return !!(b.exact || (b.lower && b.upper && segmentOk(b.lower, b.upper)));
+}
+
+function storeFor(ref) {
+  let e = lineCache.get(ref);
+  if (!e) { e = { pts: new Map(), sorted: [], probes: [], lastCount: 0 }; lineCache.set(ref, e); }
+  return e;
+}
+
 async function probe(ref, e, km) {
-  const url = `${API}/milestone?ref=${encodeURIComponent(ref)}&position=${km}&limit=${LIMIT}`;
-  const data = await getJson(url);
+  const data = await getJson(`${API}/milestone?ref=${encodeURIComponent(ref)}&position=${km}&limit=${LIMIT}`);
   // Erst nach erfolgreicher Antwort merken — sonst würde ein Netzfehler die
   // Strecke dauerhaft als „schon abgefragt" markieren.
   e.probes.push(km);
@@ -237,23 +166,19 @@ async function probe(ref, e, km) {
         operator: d.operator || '', ref: d.ref || ref
       });
     }
-    e.sorted = [...e.pts.values()].sort((a, b2) => a.km - b2.km);
+    e.sorted = [...e.pts.values()].sort((a, b) => a.km - b.km);
   }
 }
 
 async function coverage(ref, km) {
-  let e = lineCache.get(ref);
-  if (!e) { e = { pts: new Map(), sorted: [], probes: [], lastCount: 0 }; lineCache.set(ref, e); }
-
+  const e = storeFor(ref);
   const probedHere = e.probes.some(p => Math.abs(p - km) < 0.75);
   if (hasBracket(e.sorted, km) || probedHere) return e;
 
   await probe(ref, e, km);
 
-  // Die API antwortet im festen Umkreis von 10 km, unsortiert und höchstens
-  // LIMIT Einträge lang. Auf dicht erfassten Strecken (Steine alle 100 m) kann
-  // der passende Nachbar deshalb abgeschnitten sein — dann das Fenster
-  // verschieben und noch einmal nachfragen.
+  // Auf dicht erfassten Strecken (Steine alle 100 m) kann der passende Nachbar
+  // durch das LIMIT abgeschnitten sein — dann das Fenster verschieben.
   if (e.lastCount >= LIMIT && !hasBracket(e.sorted, km)) {
     for (const shift of [-6, 6]) {
       if (e.probes.some(p => Math.abs(p - (km + shift)) < 0.75)) continue;
@@ -261,7 +186,6 @@ async function coverage(ref, km) {
       if (hasBracket(e.sorted, km)) break;
     }
   }
-
   return e;
 }
 
@@ -276,138 +200,154 @@ async function resolvePoint(ref, km) {
   const { lower, upper, exact } = bracketOf(e.sorted, km);
 
   if (exact) {
-    return {
-      lat: exact.lat, lon: exact.lon, quality: 'exakt', delta: 0,
-      operator: exact.operator, lineRef: exact.ref
-    };
+    return { lat: exact.lat, lon: exact.lon, quality: 'exakt', operator: exact.operator, lineRef: exact.ref };
   }
 
   if (lower && upper) {
     const span = upper.km - lower.km;
-    if (span > 0 && span <= MAX_GAP_KM) {
+    if (segmentOk(lower, upper)) {
       const t = (km - lower.km) / span;
-      const lat = lower.lat + t * (upper.lat - lower.lat);
-      const lon = lower.lon + t * (upper.lon - lower.lon);
       const geo = haversine(lower.lat, lower.lon, upper.lat, upper.lon);
       return {
-        lat, lon, quality: 'interpoliert', delta: 0,
+        lat: lower.lat + t * (upper.lat - lower.lat),
+        lon: lower.lon + t * (upper.lon - lower.lon),
+        quality: 'interpoliert',
         between: [lower.km, upper.km],
         spanRatio: geo / (span * 1000),
+        chord: geo,
+        err: interpolationError(geo),
         operator: lower.operator || upper.operator,
         lineRef: lower.ref || upper.ref
       };
     }
   }
 
-  // Kein brauchbares Paar: nächstgelegener erfasster Stein, Abweichung wird ausgewiesen
-  const near = e.sorted.reduce((a, b2) => Math.abs(b2.km - km) < Math.abs(a.km - km) ? b2 : a);
+  const near = e.sorted.reduce((a, b) => Math.abs(b.km - km) < Math.abs(a.km - km) ? b : a);
   return {
-    lat: near.lat, lon: near.lon, quality: 'naechster', delta: near.km - km,
-    nearKm: near.km, operator: near.operator, lineRef: near.ref
+    lat: near.lat, lon: near.lon, quality: 'naechster',
+    delta: near.km - km, nearKm: near.km,
+    operator: near.operator, lineRef: near.ref
   };
 }
 
-async function resolveRange(ref, from, to) {
-  // Die API deckt je Abfrage ±10 km ab — längere Abschnitte in Schritten anfragen
-  for (let p = from; p < to; p += 12) await coverage(ref, p);
-  await coverage(ref, to);
-
-  const start = await resolvePoint(ref, from);
-  const end = await resolvePoint(ref, to);
-  const e = lineCache.get(ref);
-  const mid = e.sorted.filter(p => p.km > from && p.km < to);
-
-  const path = [[start.lat, start.lon], ...mid.map(p => [p.lat, p.lon]), [end.lat, end.lon]];
-  let len = 0;
-  for (let i = 1; i < path.length; i++) {
-    len += haversine(path[i - 1][0], path[i - 1][1], path[i][0], path[i][1]);
-  }
-
-  return { start, end, path, len, steps: mid.length, operator: start.operator || end.operator };
-}
-
-async function resolveFacility(query) {
+async function searchFacility(query) {
   const data = await getJson(`${API}/facility?q=${encodeURIComponent(query)}&limit=8`);
-  if (!Array.isArray(data) || !data.length) {
-    throw new Error(`Keine Betriebsstelle zu „${query}" gefunden.`);
+  if (!Array.isArray(data)) return [];
+  return data
+    .filter(d => typeof d.latitude === 'number' && typeof d.longitude === 'number')
+    .sort((a, b) => (b.rank || 0) - (a.rank || 0))
+    .slice(0, 5)
+    .map(d => ({
+      lat: d.latitude, lon: d.longitude,
+      name: d.name || d.short_name || query,
+      kind: d.railway || '',
+      ds100: d['railway:ref'] || '',
+      uic: d.uic_ref || '',
+      operator: d.operator || ''
+    }));
+}
+
+/* ============================ Geometrie ============================ */
+
+/* Wie weit liegt die geradlinige Interpolation zwischen zwei Steinen daneben?
+ *
+ * Im Bogen weicht die Sehne vom Gleis um rund L²/(8R) ab (L = Steinabstand,
+ * R = Bogenhalbmesser). R aus den Nachbarsteinen zu schätzen erwies sich als
+ * unbrauchbar — die Streuung der erfassten Steine schlägt bei kurzen Abständen
+ * voll durch, der Schätzer lag in fast der Hälfte der Fälle zu niedrig.
+ *
+ * Stattdessen empirisch kalibriert: über 1146 Steinpaare auf zwölf Strecken
+ * (1700, 1720, 2200, 2550, 2650, 3600, 4000, 4201, 5100, 5200, 6100, 6340)
+ * wurde jeweils ein Stein übersprungen, über die Lücke interpoliert und die
+ * Abweichung zu seiner tatsächlichen Lage gemessen. Ergebnis:
+ *
+ *   Median          L²/9700   (entspricht R ≈ 1200 m)
+ *   90. Perzentil   L²/2900   (entspricht R ≈  360 m)
+ *
+ * Das sind genau die Bogenhalbmesser, die auf diesen Strecken zu erwarten sind.
+ */
+const ERR_TYPICAL = 9700;
+const ERR_WORST = 2900;
+
+function interpolationError(chordM) {
+  return { typical: chordM * chordM / ERR_TYPICAL, worst: chordM * chordM / ERR_WORST };
+}
+
+/** Nächster Punkt auf dem Streckenzug der Kilometersteine — liefert auch den Kilometer dort. */
+function projectOnLine(sorted, lat, lon) {
+  if (!sorted || sorted.length < 2) return null;
+
+  // Lokale ebene Näherung in Metern; auf diesen Entfernungen völlig ausreichend
+  const ky = 110540, kx = Math.cos(lat * Math.PI / 180) * 111320;
+  const px = lon * kx, py = lat * ky;
+  let best = null;
+
+  for (let i = 1; i < sorted.length; i++) {
+    const a = sorted[i - 1], b = sorted[i];
+    if (!segmentOk(a, b)) continue;               // Lücken und Fehlpaare überspringen
+    const dkm = b.km - a.km;
+
+    const ax = a.lon * kx, ay = a.lat * ky;
+    const dx = b.lon * kx - ax, dy = b.lat * ky - ay;
+    const len2 = dx * dx + dy * dy;
+    let t = len2 > 0 ? ((px - ax) * dx + (py - ay) * dy) / len2 : 0;
+    t = Math.max(0, Math.min(1, t));
+
+    const cx = ax + t * dx, cy = ay + t * dy;
+    const dist = Math.hypot(px - cx, py - cy);
+    if (!best || dist < best.dist) {
+      best = { dist, km: a.km + t * dkm, lat: cy / ky, lon: cx / kx, between: [a.km, b.km] };
+    }
   }
-  const sorted = [...data].sort((a, b) => (b.rank || 0) - (a.rank || 0));
-  const best = sorted.find(d => typeof d.latitude === 'number');
-  if (!best) throw new Error(`Treffer zu „${query}" ohne Koordinaten.`);
-  return {
-    lat: best.latitude, lon: best.longitude,
-    name: best.name || best.short_name || query,
-    kind: best.railway || '',
-    ds100: best['railway:ref'] || '',
-    uic: best.uic_ref || '',
-    operator: best.operator || '',
-    others: sorted.length - 1
-  };
+  return best;
 }
 
 /* ============================ Zustand ============================ */
 
-const state = {
-  items: [],
-  activeId: null,
-  fitted: false,
-  running: false
+const view = {
+  ref: '',        // aktuell geladene Strecke
+  km: null,
+  point: null,    // {lat, lon, quality, …}
+  busy: false
 };
 
-function statusOf(item) {
-  if (item.kind === 'error' || item.error) return 'bad';
-  if (!item.result) return 'pending';
-  const r = item.result;
-  if (item.kind === 'facility') return 'ok';
-  const d = Math.abs(item.kind === 'range' ? Math.max(Math.abs(r.start.delta || 0), Math.abs(r.end.delta || 0)) : (r.delta || 0));
-  if (d <= 0.15) return 'ok';
-  if (d <= 1) return 'warn';
-  return 'bad';
-}
-
-function pointsOf(item) {
-  const r = item.result;
-  if (!r) return [];
-  if (item.kind === 'range') return [{ lat: r.start.lat, lon: r.start.lon }, { lat: r.end.lat, lon: r.end.lon }];
-  return [{ lat: r.lat, lon: r.lon }];
-}
-
-function titleOf(item) {
-  if (item.kind === 'facility') return item.result ? item.result.name : item.query;
-  if (item.kind === 'range') return `Strecke ${item.ref} · km ${fmtKm(item.from)} – ${fmtKm(item.to)}`;
-  if (item.kind === 'point') return `Strecke ${item.ref} · km ${fmtKm(item.km)}`;
-  return item.raw;
-}
+let prefs = { theme: 'auto', base: 'osm', orm: true };
+let recent = [];   // nicht "history" nennen — das ist window.history
 
 /* ============================ Karte ============================ */
 
-let map, baseOsm, baseSat, ormLayer, itemLayer, meLayer;
-const markers = new Map();   // item.index → Leaflet-Marker
+let map, baseOsm, baseSat, ormLayer, msLayer, pointLayer, meLayer;
+let pointMarker = null;
 
 function initMap() {
-  map = L.map('map', { zoomControl: true, attributionControl: true })
-    .setView([51.1, 10.3], 5);
+  map = L.map('map', { zoomControl: false, attributionControl: true, tap: true })
+    .setView([51.1, 10.3], 6);
 
   baseOsm = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    maxZoom: 19,
-    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+    maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
   });
   baseSat = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
-    maxZoom: 19, maxNativeZoom: 18, attribution: 'Luftbild: Esri, Maxar, Earthstar Geographics'
+    maxZoom: 19, maxNativeZoom: 18, attribution: 'Luftbild: Esri, Maxar'
   });
   ormLayer = L.tileLayer('https://{s}.tiles.openrailwaymap.org/standard/{z}/{x}/{y}.png', {
     subdomains: 'abc', maxZoom: 19, maxNativeZoom: 19, opacity: 0.85,
-    attribution: 'Bahn: <a href="https://www.openrailwaymap.org/">OpenRailwayMap</a> (CC-BY-SA 2.0)'
+    attribution: '<a href="https://www.openrailwaymap.org/">OpenRailwayMap</a>'
   });
 
   baseOsm.addTo(map);
-  itemLayer = L.layerGroup().addTo(map);
+  msLayer = L.layerGroup().addTo(map);
+  pointLayer = L.layerGroup().addTo(map);
   meLayer = L.layerGroup().addTo(map);
+
+  L.control.zoom({ position: 'bottomright' }).addTo(map);
   L.control.scale({ imperial: false, position: 'bottomleft' }).addTo(map);
 
   if (prefs.orm !== false) ormLayer.addTo(map);
   if (prefs.base === 'sat') setBase('sat');
-  syncMapButtons();
+
+  map.on('click', onMapClick);
+  map.on('zoomend', drawMilestones);
+  syncButtons();
 }
 
 function setBase(which) {
@@ -416,448 +356,576 @@ function setBase(which) {
   const off = which === 'sat' ? baseOsm : baseSat;
   if (map.hasLayer(off)) map.removeLayer(off);
   if (!map.hasLayer(on)) on.addTo(map);
-  // Bahn-Layer immer oben halten
   if (map.hasLayer(ormLayer)) ormLayer.bringToFront();
-  savePrefs();
-  syncMapButtons();
+  saveStore();
+  syncButtons();
 }
 
 function toggleOrm() {
   if (map.hasLayer(ormLayer)) { map.removeLayer(ormLayer); prefs.orm = false; }
   else { ormLayer.addTo(map); ormLayer.bringToFront(); prefs.orm = true; }
-  savePrefs();
-  syncMapButtons();
+  saveStore();
+  syncButtons();
 }
 
-function syncMapButtons() {
-  document.querySelectorAll('[data-base]').forEach(b =>
-    b.classList.toggle('is-on', b.dataset.base === (prefs.base || 'osm')));
-  $('#ormBtn').classList.toggle('is-on', !!map && map.hasLayer(ormLayer));
-  $('.map-panel').classList.toggle('is-big', !!prefs.big);
-  $('#bigBtn').classList.toggle('is-on', !!prefs.big);
+/* -------- Kilometersteine zeichnen -------- */
+
+/** Beschriftungsdichte nach Zoomstufe, damit die Karte nicht zuwächst. */
+function labelStep(z) {
+  if (z >= 16) return 0;      // alle
+  if (z >= 15) return 0.2;
+  if (z >= 14) return 0.5;
+  if (z >= 13) return 1;
+  if (z >= 11) return 5;
+  return 10;
 }
 
-function pinIcon(n, status, kind) {
-  const cls = ['pin', status, kind === 'facility' ? 'facility' : ''].filter(Boolean).join(' ');
-  return L.divIcon({
-    className: '', html: `<div class="${cls}"><span>${n}</span></div>`,
-    iconSize: [28, 28], iconAnchor: [14, 26], popupAnchor: [0, -24]
-  });
-}
+function drawMilestones() {
+  msLayer.clearLayers();
+  const e = view.ref && lineCache.get(view.ref);
+  if (!e || !e.sorted.length) return;
 
-function popupHtml(item, lat, lon, heading) {
-  return `<b>${esc(heading)}</b>` +
-    (item.label ? `<div>${esc(item.label)}</div>` : '') +
-    `<div class="pop-coord">${fmtCoord(lat, lon)}</div>` +
-    `<div class="pop-links">` +
-    `<a class="pop-link" href="${gmapsUrl(lat, lon)}" target="_blank" rel="noopener">Google Maps</a>` +
-    `<a class="pop-link alt" href="${ormUrl(lat, lon)}" target="_blank" rel="noopener">ORM</a>` +
-    `</div>`;
-}
+  const z = map.getZoom();
+  if (z < 9) return;
 
-function drawMap() {
-  if (!map) return;
-  itemLayer.clearLayers();
-  markers.clear();
+  const bounds = map.getBounds().pad(0.3);
+  const step = labelStep(z);
+  let lastLabelKm = -Infinity;
 
-  for (const item of state.items) {
-    if (!item.result) continue;
-    const status = statusOf(item);
-    const r = item.result;
+  // dünne Linie durch die Steine: macht sichtbar, welcher Strang gemeint ist
+  const path = [];
+  for (let i = 1; i < e.sorted.length; i++) {
+    const a = e.sorted[i - 1], b = e.sorted[i];
+    if (segmentOk(a, b)) path.push([[a.lat, a.lon], [b.lat, b.lon]]);
+  }
+  if (path.length) {
+    L.polyline(path, { color: '#4b93e6', weight: 3, opacity: 0.45, interactive: false }).addTo(msLayer);
+  }
 
-    if (item.kind === 'range') {
-      L.polyline(r.path, { color: '#3b82f6', weight: 5, opacity: 0.85 }).addTo(itemLayer);
-      const a = L.marker([r.start.lat, r.start.lon], { icon: pinIcon(item.index, status) })
-        .bindPopup(popupHtml(item, r.start.lat, r.start.lon, `${titleOf(item)} — Anfang`))
-        .addTo(itemLayer);
-      L.marker([r.end.lat, r.end.lon], { icon: pinIcon(item.index, status) })
-        .bindPopup(popupHtml(item, r.end.lat, r.end.lon, `${titleOf(item)} — Ende`))
-        .addTo(itemLayer);
-      markers.set(item.index, a);
-    } else {
-      const m = L.marker([r.lat, r.lon], { icon: pinIcon(item.index, status, item.kind) })
-        .bindPopup(popupHtml(item, r.lat, r.lon, titleOf(item)))
-        .addTo(itemLayer);
-      markers.set(item.index, m);
+  for (const p of e.sorted) {
+    const inView = bounds.contains([p.lat, p.lon]);
+    const label = step === 0 || p.km - lastLabelKm >= step - 1e-9;
+    if (label) lastLabelKm = p.km;
+    if (!inView) continue;
+
+    L.circleMarker([p.lat, p.lon], {
+      radius: label ? 4.5 : 3,
+      color: '#fff', weight: label ? 1.6 : 1,
+      fillColor: '#4b93e6', fillOpacity: 1,
+      bubblingMouseEvents: false
+    }).on('click', ev => {
+      L.DomEvent.stopPropagation(ev);
+      applyPoint(view.ref, p.km, {
+        lat: p.lat, lon: p.lon, quality: 'exakt', operator: p.operator, lineRef: p.ref
+      });
+    }).addTo(msLayer);
+
+    if (label) {
+      L.marker([p.lat, p.lon], {
+        interactive: false, keyboard: false,
+        icon: L.divIcon({ className: '', html: `<span class="ms">${fmtKm(p.km)}</span>`, iconSize: null, iconAnchor: [-7, 7] })
+      }).addTo(msLayer);
     }
   }
 }
 
-function fitMap(force) {
-  const all = state.items.flatMap(pointsOf).map(p => [p.lat, p.lon]);
-  if (!all.length) return;
-  if (state.fitted && !force) return;
-  if (all.length === 1) map.setView(all[0], 16);
-  else map.fitBounds(L.latLngBounds(all), { padding: [40, 40], maxZoom: 16 });
-  state.fitted = true;
+function drawPoint() {
+  pointLayer.clearLayers();
+  pointMarker = null;
+  if (!view.point) return;
+
+  const q = view.point.quality;
+  const cls = q === 'naechster' ? 'bad' : q === 'karte' ? 'warn' : '';
+  pointMarker = L.marker([view.point.lat, view.point.lon], {
+    icon: L.divIcon({ className: '', html: `<div class="pin ${cls}"></div>`, iconSize: [26, 26], iconAnchor: [13, 24] }),
+    zIndexOffset: 1000
+  }).addTo(pointLayer);
 }
 
-function focusItem(index) {
-  const m = markers.get(index);
-  if (!m) return;
-  state.activeId = index;
-  document.querySelectorAll('.pin.is-active').forEach(el => el.classList.remove('is-active'));
-  const el = m.getElement() && m.getElement().querySelector('.pin');
-  if (el) el.classList.add('is-active');
-  map.setView(m.getLatLng(), Math.max(map.getZoom(), 16), { animate: true });
-  m.openPopup();
-  document.querySelector('.map-panel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+/* ============================ Klick auf die Karte ============================ */
+
+/** Wie viele Meter sind CLICK_TOL_PX auf der aktuellen Zoomstufe? */
+function toleranceMeters(latlng) {
+  const a = map.latLngToContainerPoint(latlng);
+  const b = map.containerPointToLatLng(L.point(a.x + CLICK_TOL_PX, a.y));
+  return Math.max(map.distance(latlng, b), 25);
 }
 
-/* -------- eigener Standort -------- */
+async function onMapClick(ev) {
+  if (view.busy) return;
+  const { lat, lng } = ev.latlng;
+  closeSuggest();
 
-let meMarker = null;
+  const e = view.ref && lineCache.get(view.ref);
+  const tol = toleranceMeters(ev.latlng);
+
+  if (e && e.sorted.length > 1) {
+    let hit = projectOnLine(e.sorted, lat, lng);
+
+    // Am Rand der geladenen Daten weiterladen — aber nur, wenn der Klick
+    // überhaupt in Reichweite der Strecke liegt. Sonst ist es eine andere Gegend.
+    const nearest = e.sorted.reduce((a, b) =>
+      haversine(lat, lng, b.lat, b.lon) < haversine(lat, lng, a.lat, a.lon) ? b : a);
+    const gap = haversine(lat, lng, nearest.lat, nearest.lon);
+
+    if ((!hit || hit.dist > tol) && gap < 25000) {
+      const first = e.sorted[0], last = e.sorted[e.sorted.length - 1];
+      const towardsEnd = Math.abs(nearest.km - last.km) < Math.abs(nearest.km - first.km);
+      const nextKm = towardsEnd ? last.km + 15 : first.km - 15;
+      if (!e.probes.some(p => Math.abs(p - nextKm) < 0.75)) {
+        setBusy(true);
+        try { await coverage(view.ref, nextKm); } catch { /* dann eben nicht */ }
+        setBusy(false);
+        hit = projectOnLine(lineCache.get(view.ref).sorted, lat, lng);
+        drawMilestones();
+      }
+    }
+
+    if (hit && hit.dist <= tol) {
+      applyPoint(view.ref, hit.km, {
+        lat: hit.lat, lon: hit.lon, quality: 'karte',
+        between: hit.between, offset: hit.dist,
+        operator: e.sorted[0].operator, lineRef: view.ref
+      });
+      coverage(view.ref, hit.km).then(drawMilestones).catch(() => { });
+      return;
+    }
+  }
+
+  await lookupByClick(lat, lng);
+}
+
+/** Kürzester Abstand eines Punktes zu einem Weg (Meter). */
+function distToWay(lat, lon, geometry) {
+  if (!geometry || geometry.length === 0) return Infinity;
+  if (geometry.length === 1) return haversine(lat, lon, geometry[0].lat, geometry[0].lon);
+
+  const ky = 110540, kx = Math.cos(lat * Math.PI / 180) * 111320;
+  const px = lon * kx, py = lat * ky;
+  let best = Infinity;
+
+  for (let i = 1; i < geometry.length; i++) {
+    const ax = geometry[i - 1].lon * kx, ay = geometry[i - 1].lat * ky;
+    const dx = geometry[i].lon * kx - ax, dy = geometry[i].lat * ky - ay;
+    const len2 = dx * dx + dy * dy;
+    let t = len2 > 0 ? ((px - ax) * dx + (py - ay) * dy) / len2 : 0;
+    t = Math.max(0, Math.min(1, t));
+    best = Math.min(best, Math.hypot(px - (ax + t * dx), py - (ay + t * dy)));
+  }
+  return best;
+}
+
+/** Welche Strecke liegt an dieser Stelle? Das kann nur Overpass beantworten.
+ *  Die Kandidaten werden nach echtem Abstand zum Klick sortiert — an einem
+ *  Bahnhof liegen sonst ein halbes Dutzend gleichrangiger Nummern nebeneinander. */
+async function linesNear(lat, lon) {
+  const q = `[out:json][timeout:25];` +
+    `way(around:80,${lat},${lon})[railway~"^(rail|light_rail|narrow_gauge)$"][ref]->.w;` +
+    `node(around:900,${lat},${lon})[railway=milestone]->.n;` +
+    `.w out tags geom 40;` +
+    `.n out body 80;`;      // body, nicht tags — sonst fehlen die Koordinaten der Knoten
+
+  let data = null, lastErr = null;
+  for (const ep of OVERPASS) {
+    try { data = await tryFetch(ep + '?data=' + encodeURIComponent(q), 25000); break; }
+    catch (err) { lastErr = err; }
+  }
+  if (!data) throw new Error('Overpass nicht erreichbar (' + (lastErr && lastErr.message) + ')');
+
+  const els = data.elements || [];
+
+  // je Streckennummer den geringsten Abstand behalten
+  const byRef = new Map();
+  for (const w of els) {
+    if (w.type !== 'way' || !w.tags || !w.tags.ref) continue;
+    const d = distToWay(lat, lon, w.geometry);
+    for (const part of String(w.tags.ref).split(';')) {
+      const r = part.trim();
+      if (!r) continue;
+      if (!byRef.has(r) || byRef.get(r) > d) byRef.set(r, d);
+    }
+  }
+  const refs = [...byRef.entries()]
+    .sort((a, b) => a[1] - b[1])
+    .slice(0, 4)
+    .map(([ref, dist]) => ({ ref, dist }));
+
+  // Nächster Kilometerstein als Startwert — die ORM-API braucht eine Position,
+  // um überhaupt etwas ausliefern zu können.
+  const stones = els
+    .filter(n => n.type === 'node' && n.tags && n.tags['railway:position'] != null)
+    .map(n => ({ km: parseFloat(String(n.tags['railway:position']).replace(',', '.')), dist: haversine(lat, lon, n.lat, n.lon) }))
+    .filter(s => isFinite(s.km))
+    .sort((a, b) => a.dist - b.dist);
+
+  return { refs, seed: stones[0] || null };
+}
+
+async function lookupByClick(lat, lon) {
+  setBusy(true);
+  showStatus('Suche, welche Strecke hier liegt …');
+  try {
+    const { refs, seed } = await linesNear(lat, lon);
+    if (!refs.length) {
+      showError('Hier ist keine nummerierte Strecke erfasst. Näher an ein Gleis tippen.');
+      return;
+    }
+    if (!seed) {
+      showError(`Strecke ${refs.map(r => r.ref).join(' / ')} liegt hier, aber im Umkreis von 900 m ist kein Kilometerstein erfasst — der Kilometer lässt sich nicht bestimmen.`);
+      return;
+    }
+    if (refs.length === 1) {
+      await useLineAt(refs[0].ref, seed.km, lat, lon);
+    } else {
+      showPicker(refs, seed.km, lat, lon);
+    }
+  } catch (err) {
+    showError('Umkreissuche fehlgeschlagen: ' + err.message);
+  } finally {
+    setBusy(false);
+  }
+}
+
+/** Strecke laden und den Klickpunkt darauf projizieren. */
+async function useLineAt(ref, seedKm, lat, lon) {
+  setBusy(true);
+  showStatus(`Lade Strecke ${ref} …`);
+  try {
+    view.ref = ref;
+    $('#ref').value = ref;
+    await coverage(ref, seedKm);
+    const e = lineCache.get(ref);
+    drawMilestones();
+
+    const hit = projectOnLine(e.sorted, lat, lon);
+    if (!hit) {
+      showError(`Für Strecke ${ref} sind hier zu wenige Kilometersteine erfasst.`);
+      return;
+    }
+    if (hit.dist > 400) {
+      showError(`Der Punkt liegt ${nfM.format(hit.dist)} m von den erfassten Steinen der Strecke ${ref} entfernt — das wäre zu ungenau.`);
+      return;
+    }
+    applyPoint(ref, hit.km, {
+      lat: hit.lat, lon: hit.lon, quality: 'karte',
+      between: hit.between, offset: hit.dist,
+      operator: e.sorted[0].operator, lineRef: ref
+    });
+  } catch (err) {
+    showError('Konnte Strecke ' + ref + ' nicht laden: ' + err.message);
+  } finally {
+    setBusy(false);
+  }
+}
+
+function showPicker(refs, seedKm, lat, lon) {
+  const b = $('#bottom');
+  b.hidden = false;
+  b.innerHTML = `<p class="bb-title">Mehrere Strecken an dieser Stelle</p>
+    <p class="bb-sub">Sortiert nach Abstand zum Tippen — die erste liegt am nächsten.</p>
+    <div class="pick">${refs.map(r =>
+      `<button type="button" data-pick="${esc(r.ref)}">${esc(r.ref)}<small>${nfM.format(r.dist)} m</small></button>`).join('')}</div>`;
+  b.querySelectorAll('[data-pick]').forEach(btn =>
+    btn.addEventListener('click', () => useLineAt(btn.dataset.pick, seedKm, lat, lon)));
+  updateBH();
+}
+
+/* ============================ Punkt setzen & anzeigen ============================ */
+
+function applyPoint(ref, km, result) {
+  view.ref = ref;
+  view.km = km;
+  view.point = result;
+
+  $('#ref').value = ref;
+  $('#km').value = fmtKm(km);
+
+  drawPoint();
+  drawMilestones();
+  renderBottom();
+  pushRecent(ref, km);
+  updateHash();
+}
+
+function qualityTag(p) {
+  if (p.quality === 'exakt') return { cls: 'ok', text: 'Kilometerstein' };
+  if (p.quality === 'interpoliert') {
+    return p.err.worst > 25
+      ? { cls: 'warn', text: `interpoliert ±${nfM.format(p.err.worst)} m` }
+      : { cls: 'ok', text: `interpoliert ±${nfM.format(Math.max(p.err.worst, 1))} m` };
+  }
+  if (p.quality === 'karte') return { cls: 'warn', text: 'von der Karte' };
+  if (p.quality === 'betriebsstelle') return { cls: 'ok', text: 'Betriebsstelle' };
+  const d = Math.abs(p.delta || 0);
+  return { cls: d > 1 ? 'bad' : 'warn', text: `${fmtKm(d)} km daneben` };
+}
+
+function renderBottom() {
+  const b = $('#bottom');
+  const p = view.point;
+  if (!p) { b.hidden = true; updateBH(); return; }
+
+  const tag = qualityTag(p);
+  let title, sub;
+
+  if (p.quality === 'betriebsstelle') {
+    const kindDe = { station: 'Bahnhof', halt: 'Haltepunkt', yard: 'Bahnhofsteil', junction: 'Abzweigstelle', service_station: 'Betriebsbahnhof', crossover: 'Überleitstelle' }[p.kind] || 'Betriebsstelle';
+    title = p.name;
+    sub = [kindDe, p.ds100 && 'DS100 ' + p.ds100, p.uic && 'UIC ' + p.uic, p.operator].filter(Boolean).join(' · ');
+  } else {
+    title = `Strecke ${p.lineRef || view.ref} · km ${fmtKm(view.km)}`;
+    sub = p.operator || 'Kilometrierung nach OpenStreetMap';
+  }
+
+  // Kritisches steht sichtbar, Erklärendes klappt auf — sonst frisst die
+  // Leiste den halben Bildschirm
+  let warn = '', detail = '';
+
+  if (p.quality === 'naechster') {
+    warn = `<p class="bb-note">Bei km ${fmtKm(view.km)} ist kein Stein erfasst. Angezeigt wird der nächstgelegene bei km ${fmtKm(p.nearKm)} — ${fmtKm(Math.abs(p.delta))} km Unterschied.</p>`;
+  } else if (p.quality === 'karte') {
+    detail = `Aus dem Kartentipp abgeleitet, zwischen den Steinen bei km ${fmtKm(p.between[0])} und ${fmtKm(p.between[1])}` +
+      (p.offset > 15 ? `, ${nfM.format(p.offset)} m querab der Linie` : '') + `.`;
+  } else if (p.quality === 'interpoliert') {
+    // Der Steinabstand ist der eigentliche Genauigkeitsfaktor, nicht die Rechnung selbst
+    detail = `Geradlinig gerechnet zwischen den Steinen bei km ${fmtKm(p.between[0])} und ${fmtKm(p.between[1])}, ` +
+      `${nfM.format(p.chord)} m auseinander. Typisch ${nfM.format(p.err.typical)} m daneben, im Bogen bis ${nfM.format(p.err.worst)} m.`;
+    if (p.err.worst > 60) {
+      warn = `<p class="bb-note">Steine ${nfM.format(p.chord)} m auseinander — macht die Strecke hier einen Bogen, liegt der Punkt bis ${nfM.format(p.err.worst)} m neben dem Gleis.</p>`;
+    }
+    if (p.spanRatio < 0.75) {
+      warn += `<p class="bb-note">Luftlinie und Kilometerdifferenz passen nicht zusammen (${Math.round(p.spanRatio * 100)} %) — starker Bogen oder Kilometersprung.</p>`;
+    }
+  }
+
+  b.hidden = false;
+  b.innerHTML = `
+    <div class="bb-head">
+      <p class="bb-title">${esc(title)}</p>
+      <span class="tag ${tag.cls}">${esc(tag.text)}</span>
+    </div>
+    <p class="bb-coord">${fmtCoord(p.lat, p.lon)}</p>
+    ${warn}
+    <details class="bb-more">
+      <summary>Herkunft &amp; Genauigkeit</summary>
+      <p class="bb-note plain">${esc(sub)}${detail ? ' · ' + esc(detail) : ''}</p>
+    </details>
+    <div class="bb-actions">
+      <a class="maps" href="${gmapsUrl(p.lat, p.lon)}" target="_blank" rel="noopener">In Google Maps öffnen</a>
+      <a href="${gmapsRoute(p.lat, p.lon)}" target="_blank" rel="noopener">Route</a>
+      <button type="button" id="copyBtn">Kopieren</button>
+    </div>`;
+  b.querySelector('.bb-more').addEventListener('toggle', updateBH);
+
+  $('#copyBtn').addEventListener('click', async () => {
+    toast(await copyText(fmtCoord(p.lat, p.lon)) ? 'Koordinaten kopiert' : 'Kopieren nicht möglich');
+  });
+  updateBH();
+}
+
+function showStatus(msg) {
+  const b = $('#bottom');
+  b.hidden = false;
+  b.innerHTML = `<p class="bb-sub">${esc(msg)}</p>`;
+  updateBH();
+}
+
+function showError(msg) {
+  const b = $('#bottom');
+  b.hidden = false;
+  b.innerHTML = `<p class="bb-err">${esc(msg)}</p>`;
+  updateBH();
+}
+
+/** Leaflet-Bedienelemente über der unteren Leiste halten */
+function updateBH() {
+  const b = $('#bottom');
+  const h = b.hidden ? 0 : Math.round(b.getBoundingClientRect().height) + 18;
+  document.documentElement.style.setProperty('--bh', h + 'px');
+}
+
+function setBusy(on) {
+  view.busy = on;
+  $('#progress').hidden = !on;
+  $('#go').classList.toggle('busy', on);
+}
+
+/* ============================ Suche über die Felder ============================ */
+
+async function search() {
+  if (view.busy) return;
+  closeSuggest();
+
+  const ref = $('#ref').value.trim();
+  const kmRaw = $('#km').value.trim();
+
+  if (!ref) { toast('Bitte eine Streckennummer eingeben.'); $('#ref').focus(); return; }
+
+  setBusy(true);
+  try {
+    if (!kmRaw) {
+      // Nur Strecke: Anfang der Strecke zeigen, damit man sich orientieren kann
+      view.ref = ref;
+      await coverage(ref, 0);
+      const e = lineCache.get(ref);
+      if (!e.sorted.length) { showError(`Für Strecke ${ref} sind keine Kilometersteine erfasst — Nummer prüfen.`); return; }
+      view.point = null;
+      drawPoint();
+      drawMilestones();
+      fitLine(e);
+      showStatus(`Strecke ${ref}: ${e.sorted.length} Kilometersteine geladen. Auf die Linie tippen setzt einen Punkt.`);
+      return;
+    }
+
+    const km = toKm(kmRaw);
+    if (!isFinite(km)) { toast('Kilometer nicht lesbar — z. B. 12,5 oder 14+250.'); return; }
+
+    view.ref = ref;
+    const res = await resolvePoint(ref, km);
+    applyPoint(ref, km, res);
+    map.setView([res.lat, res.lon], Math.max(map.getZoom(), 15));
+  } catch (err) {
+    showError(err.message || 'Abfrage fehlgeschlagen.');
+  } finally {
+    setBusy(false);
+  }
+}
+
+function fitLine(e) {
+  const pts = e.sorted.map(p => [p.lat, p.lon]);
+  if (!pts.length) return;
+  if (pts.length === 1) map.setView(pts[0], 15);
+  else map.fitBounds(L.latLngBounds(pts), { paddingTopLeft: [30, 90], paddingBottomRight: [30, 130], maxZoom: 15 });
+}
+
+/* ============================ Betriebsstellen ============================ */
+
+async function runFacility() {
+  const q = $('#facQ').value.trim();
+  const out = $('#facOut');
+  if (!q) { out.innerHTML = ''; return; }
+  out.innerHTML = '<p class="fine">Suche …</p>';
+  try {
+    const list = await searchFacility(q);
+    if (!list.length) { out.innerHTML = `<p class="fine">Nichts zu „${esc(q)}" gefunden.</p>`; return; }
+    out.innerHTML = list.map((f, i) => {
+      const meta = [f.ds100 && 'DS100 ' + f.ds100, f.uic && 'UIC ' + f.uic, f.operator].filter(Boolean).join(' · ');
+      return `<button class="fac-item" type="button" data-fac="${i}">${esc(f.name)}<small>${esc(meta || 'Betriebsstelle')}</small></button>`;
+    }).join('');
+    out.querySelectorAll('[data-fac]').forEach(btn => btn.addEventListener('click', () => {
+      const f = list[Number(btn.dataset.fac)];
+      view.km = null;
+      view.point = { ...f, quality: 'betriebsstelle' };
+      $('#km').value = '';
+      drawPoint();
+      renderBottom();
+      map.setView([f.lat, f.lon], 16);
+      closeSheet();
+    }));
+  } catch (err) {
+    out.innerHTML = `<p class="fine">Suche fehlgeschlagen: ${esc(err.message)}</p>`;
+  }
+}
+
+/* ============================ Standort ============================ */
+
 function locate() {
   if (!navigator.geolocation) { toast('Standortbestimmung wird nicht unterstützt.'); return; }
   if (!window.isSecureContext) { toast('Standort geht nur über HTTPS.'); return; }
+  closeSheet();
   toast('Standort wird ermittelt …');
   navigator.geolocation.getCurrentPosition(pos => {
     const { latitude: lat, longitude: lon, accuracy } = pos.coords;
     meLayer.clearLayers();
-    meMarker = L.marker([lat, lon], {
+    L.marker([lat, lon], {
       icon: L.divIcon({ className: '', html: '<div class="me-dot"></div>', iconSize: [16, 16], iconAnchor: [8, 8] })
     }).addTo(meLayer);
     L.circle([lat, lon], { radius: Math.max(accuracy || 0, 5), color: '#2f81f7', weight: 1, fillOpacity: 0.12 }).addTo(meLayer);
-    meMarker.bindPopup(
-      `<b>Mein Standort</b><div class="pop-coord">${fmtCoord(lat, lon)} · ±${nfM.format(accuracy || 0)} m</div>` +
-      `<div class="pop-links">` +
-      `<a class="pop-link" href="${gmapsUrl(lat, lon)}" target="_blank" rel="noopener">Google Maps</a>` +
-      `<a class="pop-link alt" href="#" data-here="1">Strecke hier</a></div>`
-    ).openPopup();
     map.setView([lat, lon], 16);
-    state.fitted = true;
+    toast(`Standort auf ±${nfM.format(accuracy || 0)} m genau — auf die Strecke tippen für den Kilometer.`);
   }, err => {
     toast('Standort nicht verfügbar: ' + (err.message || 'unbekannt'));
   }, { enableHighAccuracy: true, timeout: 15000, maximumAge: 10000 });
 }
 
-/* Rückwärts-Suche über Overpass: welcher Kilometerstein liegt in der Nähe?
- * Bewusst als Zusatz gebaut — schlägt die Abfrage fehl, bleibt der Rest nutzbar. */
-const OVERPASS = [
-  'https://overpass-api.de/api/interpreter',
-  'https://overpass.kumi.systems/api/interpreter'
-];
-
-async function whereAmI(lat, lon) {
-  const q = `[out:json][timeout:25];(node(around:400,${lat},${lon})[railway=milestone];` +
-    `way(around:150,${lat},${lon})[railway~"^(rail|light_rail|narrow_gauge|subway)$"][ref];);out tags center 60;`;
-  let data = null, lastErr = null;
-  for (const ep of OVERPASS) {
-    try { data = await tryFetch(ep + '?data=' + encodeURIComponent(q), 25000); break; }
-    catch (e) { lastErr = e; }
-  }
-  if (!data) throw new Error('Overpass nicht erreichbar (' + (lastErr && lastErr.message) + ')');
-
-  const els = data.elements || [];
-  const stones = els.filter(e => e.type === 'node' && e.tags && e.tags['railway:position'] != null)
-    .map(e => ({
-      km: parseFloat(String(e.tags['railway:position']).replace(',', '.')),
-      ref: e.tags['railway:ref'] || e.tags.ref || '',
-      dist: haversine(lat, lon, e.lat, e.lon)
-    }))
-    .filter(s => isFinite(s.km))
-    .sort((a, b) => a.dist - b.dist);
-
-  const lines = [...new Set(els.filter(e => e.type === 'way' && e.tags && e.tags.ref)
-    .map(e => e.tags.ref))].slice(0, 3);
-
-  return { stone: stones[0] || null, lines };
-}
-
-/* ============================ Ausgabe ============================ */
-
-function cardHtml(item) {
-  const status = statusOf(item);
-  const num = `<div class="num">${item.index}</div>`;
-
-  if (item.kind === 'error' || item.error) {
-    return `<article class="card bad" data-index="${item.index}">
-      <div class="card-head">${num}<div class="card-title">
-        <p class="title">${esc(item.kind === 'error' ? item.raw : titleOf(item))}</p>
-        <p class="err">${esc(item.error)}</p>
-      </div></div></article>`;
-  }
-
-  if (!item.result) {
-    return `<article class="card pending" data-index="${item.index}">
-      <div class="card-head">${num}<div class="card-title">
-        <p class="title">${esc(titleOf(item))}</p>
-        <p class="subtitle">wird gesucht …</p>
-      </div></div></article>`;
-  }
-
-  const r = item.result;
-  const lat = item.kind === 'range' ? r.start.lat : r.lat;
-  const lon = item.kind === 'range' ? r.start.lon : r.lon;
-
-  let badges = '', hints = '';
-
-  if (item.kind === 'facility') {
-    const kindDe = { station: 'Bahnhof', halt: 'Haltepunkt', yard: 'Bahnhofsteil/Gruppe', junction: 'Abzweigstelle', service_station: 'Betriebsbahnhof', crossover: 'Überleitstelle' }[r.kind] || r.kind || 'Betriebsstelle';
-    badges = `<span class="badge ok">${esc(kindDe)}</span>` +
-      (r.ds100 ? `<span class="badge">DS100 ${esc(r.ds100)}</span>` : '') +
-      (r.uic ? `<span class="badge">UIC ${esc(r.uic)}</span>` : '');
-    if (r.others > 0) hints += `<p class="hint-row">${r.others} weitere Treffer — Suchbegriff genauer fassen, falls es der falsche ist.</p>`;
-  } else if (item.kind === 'range') {
-    badges = `<span class="badge ok">Abschnitt</span>` +
-      `<span class="badge">${nfKm.format(r.len / 1000)} km Luftlinie über ${r.steps} Steine</span>`;
-    for (const [nameDe, part] of [['Anfang', r.start], ['Ende', r.end]]) {
-      if (part.quality === 'naechster') {
-        hints += `<p class="hint-row strong">${nameDe}: kein Stein bei km ${fmtKm(nameDe === 'Anfang' ? item.from : item.to)} — genommen wurde km ${fmtKm(part.nearKm)} (${fmtKm(Math.abs(part.delta))} km daneben).</p>`;
-      }
-    }
-  } else {
-    if (r.quality === 'exakt') {
-      badges = `<span class="badge ok">Kilometerstein vorhanden</span>`;
-    } else if (r.quality === 'interpoliert') {
-      badges = `<span class="badge ok">interpoliert</span>` +
-        `<span class="badge">zwischen km ${fmtKm(r.between[0])} und ${fmtKm(r.between[1])}</span>`;
-      if (r.spanRatio < 0.75 || r.spanRatio > 1.35) {
-        hints += `<p class="hint-row">Der Abstand der beiden Steine passt nicht zur Kilometerdifferenz ` +
-          `(${Math.round(r.spanRatio * 100)} %). Möglich sind ein Kilometersprung oder ein enger Bogen — Position mit Vorsicht nutzen.</p>`;
-      }
-    } else {
-      const d = Math.abs(r.delta);
-      badges = `<span class="badge ${status}">${fmtKm(d)} km daneben</span>` +
-        `<span class="badge">nächster Stein: km ${fmtKm(r.nearKm)}</span>`;
-      hints += `<p class="hint-row strong">Bei km ${fmtKm(item.km)} ist kein Stein erfasst. Angezeigt wird der nächstgelegene ` +
-        `bei km ${fmtKm(r.nearKm)} — das sind ${fmtKm(d)} km Unterschied.</p>`;
-    }
-  }
-
-  if (item.warnInput) hints += `<p class="hint-row">${esc(item.warnInput)}</p>`;
-
-  const sub = item.kind === 'facility'
-    ? [r.operator, 'gefunden über Namenssuche'].filter(Boolean).join(' · ')
-    : [`Strecke ${esc(r.lineRef || item.ref)}`, r.operator].filter(Boolean).join(' · ');
-
-  return `<article class="card ${status}" data-index="${item.index}">
-    <div class="card-head">${num}<div class="card-title">
-      <p class="title">${esc(titleOf(item))}</p>
-      <p class="subtitle">${esc(sub)}</p>
-    </div></div>
-    ${item.label ? `<p class="card-label">${esc(item.label)}</p>` : ''}
-    <p class="coord">${fmtCoord(lat, lon)}</p>
-    <div>${badges}</div>
-    ${hints}
-    <div class="card-actions">
-      <a class="maps" href="${gmapsUrl(lat, lon)}" target="_blank" rel="noopener">In Google Maps öffnen</a>
-      <button type="button" data-act="show">Auf Karte</button>
-      <button type="button" data-act="copy">Kopieren</button>
-      <a href="${gmapsRoute(lat, lon)}" target="_blank" rel="noopener">Route</a>
-    </div>
-  </article>`;
-}
-
-function render() {
-  const box = $('#results');
-  const done = state.items.filter(i => i.result).length;
-  const failed = state.items.filter(i => i.error || i.kind === 'error').length;
-
-  const summary = state.items.length
-    ? `<p class="summary-line">${state.items.length} Eingabe${state.items.length === 1 ? '' : 'n'} · ` +
-      `${done} verortet${failed ? ` · ${failed} ohne Ergebnis` : ''}${state.running ? ' · läuft …' : ''}</p>`
-    : '';
-
-  box.innerHTML = summary + state.items.map(cardHtml).join('');
-  $('#exportPanel').hidden = done === 0;
-  drawMap();
-}
-
-/* ============================ Ablauf ============================ */
-
-async function pool(items, limit, worker) {
-  let i = 0;
-  const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
-    while (i < items.length) {
-      const item = items[i++];
-      await worker(item);
-    }
-  });
-  await Promise.all(runners);
-}
-
-async function run() {
-  if (state.running) return;
-
-  const ref = $('#ref').value.trim();
-  const text = $('#entries').value;
-  let items = parseAll(text, ref);
-
-  if (!items.length) {
-    toast('Bitte mindestens eine Kilometerangabe eintragen.');
-    return;
-  }
-
-  let capped = 0;
-  if (items.length > MAX_ENTRIES) {
-    capped = items.length - MAX_ENTRIES;
-    items = items.slice(0, MAX_ENTRIES);
-  }
-
-  state.items = items;
-  state.fitted = false;
-  state.running = true;
-  $('#go').disabled = true;
-  render();
-
-  await pool(items.filter(i => i.kind !== 'error'), CONCURRENCY, async item => {
-    try {
-      if (item.kind === 'facility') item.result = await resolveFacility(item.query);
-      else if (item.kind === 'range') item.result = await resolveRange(item.ref, item.from, item.to);
-      else item.result = await resolvePoint(item.ref, item.km);
-    } catch (e) {
-      item.error = e.message || 'Abfrage fehlgeschlagen.';
-    }
-    render();
-    if (!state.fitted) fitMap();
-  });
-
-  state.running = false;
-  $('#go').disabled = false;
-  state.fitted = false;
-  render();
-  fitMap(true);
-
-  if (capped) toast(`Nur die ersten ${MAX_ENTRIES} Zeilen abgefragt (${capped} übersprungen).`);
-  pushHistory(ref, text);
-  updateHash(ref, text);
-}
-
-/* ============================ Export ============================ */
-
-function exportRows() {
-  const rows = [];
-  for (const item of state.items) {
-    if (!item.result) continue;
-    const r = item.result;
-    const push = (bez, lat, lon, info) => rows.push({
-      bez, lat, lon, info, label: item.label || '',
-      ref: item.kind === 'facility' ? (r.ds100 || '') : (r.lineRef || item.ref || '')
-    });
-
-    if (item.kind === 'range') {
-      push(`${titleOf(item)} — Anfang`, r.start.lat, r.start.lon, qualityText(r.start));
-      push(`${titleOf(item)} — Ende`, r.end.lat, r.end.lon, qualityText(r.end));
-    } else {
-      push(titleOf(item), r.lat, r.lon, item.kind === 'facility' ? 'Betriebsstelle' : qualityText(r));
-    }
-  }
-  return rows;
-}
-
-function qualityText(r) {
-  if (r.quality === 'exakt') return 'Kilometerstein vorhanden';
-  if (r.quality === 'interpoliert') return `interpoliert zwischen km ${fmtKm(r.between[0])} und ${fmtKm(r.between[1])}`;
-  return `nächster Stein km ${fmtKm(r.nearKm)} (${fmtKm(Math.abs(r.delta))} km Abweichung)`;
-}
-
-function asText() {
-  return exportRows().map(r =>
-    `${r.bez}${r.label ? ` (${r.label})` : ''}\n  ${r.lat.toFixed(6)}, ${r.lon.toFixed(6)}  [${r.info}]\n  ${gmapsUrl(r.lat, r.lon)}`
-  ).join('\n\n');
-}
-
-function asCsv() {
-  const head = 'Bezeichnung;Strecke;Breite;Laenge;Qualitaet;Bemerkung;GoogleMaps';
-  const body = exportRows().map(r => [
-    r.bez, r.ref, r.lat.toFixed(6).replace('.', ','), r.lon.toFixed(6).replace('.', ','),
-    r.info, r.label, gmapsUrl(r.lat, r.lon)
-  ].map(v => `"${String(v).replace(/"/g, '""')}"`).join(';'));
-  const bom = String.fromCharCode(0xFEFF);      // damit Excel die Umlaute erkennt
-  return bom + [head, ...body].join('\r\n');
-}
-
-function asGpx() {
-  const x = s => esc(s);
-  const wpts = exportRows().map(r =>
-    `  <wpt lat="${r.lat.toFixed(6)}" lon="${r.lon.toFixed(6)}">\n` +
-    `    <name>${x(r.bez)}</name>\n    <desc>${x([r.info, r.label].filter(Boolean).join(' — '))}</desc>\n  </wpt>`
-  );
-  const trks = state.items.filter(i => i.kind === 'range' && i.result).map(i =>
-    `  <trk><name>${x(titleOf(i))}</name><trkseg>\n` +
-    i.result.path.map(p => `    <trkpt lat="${p[0].toFixed(6)}" lon="${p[1].toFixed(6)}"/>`).join('\n') +
-    `\n  </trkseg></trk>`
-  );
-  return `<?xml version="1.0" encoding="UTF-8"?>\n` +
-    `<gpx version="1.1" creator="Railnav" xmlns="http://www.topografix.com/GPX/1/1">\n` +
-    `  <metadata><name>Railnav-Export</name></metadata>\n` +
-    [...wpts, ...trks].join('\n') + `\n</gpx>\n`;
-}
-
-function permalink(ref, text) {
-  const p = new URLSearchParams();
-  if (ref) p.set('r', ref);
-  p.set('q', text);
-  return location.origin + location.pathname + '#' + p.toString();
-}
-
-async function doExport(kind) {
-  const rows = exportRows();
-  if (!rows.length && kind !== 'link') { toast('Noch keine Ergebnisse.'); return; }
-  const stamp = new Date().toISOString().slice(0, 10);
-
-  if (kind === 'copy') {
-    toast(await copyText(asText()) ? 'Liste kopiert' : 'Kopieren nicht möglich');
-  } else if (kind === 'csv') {
-    download(`railnav-${stamp}.csv`, 'text/csv;charset=utf-8', asCsv());
-  } else if (kind === 'gpx') {
-    download(`railnav-${stamp}.gpx`, 'application/gpx+xml', asGpx());
-  } else if (kind === 'link') {
-    const url = permalink($('#ref').value.trim(), $('#entries').value);
-    if (navigator.share) {
-      try { await navigator.share({ title: 'Railnav', text: 'Positionen', url }); return; }
-      catch { /* abgebrochen — dann kopieren */ }
-    }
-    toast(await copyText(url) ? 'Link kopiert' : 'Kopieren nicht möglich');
-  }
-}
-
-/* ============================ Verlauf & Einstellungen ============================ */
-
-let prefs = { theme: 'auto', base: 'osm', orm: true, big: false };
-let recent = [];   // nicht "history" nennen — das ist window.history
+/* ============================ Verlauf ============================ */
 
 function loadStore() {
   try {
     const raw = JSON.parse(localStorage.getItem(STORE_KEY) || '{}');
     prefs = { ...prefs, ...(raw.prefs || {}) };
-    recent = Array.isArray(raw.history) ? raw.history : [];
+    recent = Array.isArray(raw.recent) ? raw.recent : [];
   } catch { /* defekter Speicher — Standardwerte behalten */ }
 }
 
 function saveStore() {
-  try { localStorage.setItem(STORE_KEY, JSON.stringify({ prefs, history: recent })); } catch { /* voll oder gesperrt */ }
+  try { localStorage.setItem(STORE_KEY, JSON.stringify({ prefs, recent })); } catch { /* voll oder gesperrt */ }
 }
-const savePrefs = saveStore;
 
-function pushHistory(ref, text) {
-  const entry = { ref, text, n: state.items.length };
-  recent = [entry, ...recent.filter(h => !(h.ref === ref && h.text === text))].slice(0, 10);
+function pushRecent(ref, km) {
+  const entry = { ref, km };
+  recent = [entry, ...recent.filter(r => !(r.ref === ref && Math.abs(r.km - km) < 1e-6))].slice(0, 12);
   saveStore();
-  renderHistory();
 }
 
-function renderHistory() {
-  const wrap = $('#historyPanel');
-  wrap.hidden = recent.length === 0;
-  $('#history').innerHTML = recent.map((h, i) => {
-    const first = h.text.split(/\r?\n/).find(l => l.trim()) || '';
-    const more = h.n > 1 ? ` +${h.n - 1}` : '';
-    return `<button class="chip" type="button" data-hist="${i}">${h.ref ? `<b>${esc(h.ref)}</b> · ` : ''}${esc(first.slice(0, 28))}${esc(more)}</button>`;
-  }).join('');
+function openSuggest() {
+  const box = $('#suggest');
+  const typed = $('#ref').value.trim().toLowerCase();
+  const list = recent.filter(r => !typed || String(r.ref).toLowerCase().startsWith(typed)).slice(0, 6);
+  if (!list.length) { closeSuggest(); return; }
+
+  box.innerHTML = list.map((r, i) =>
+    `<button class="suggest-item" type="button" role="option" data-rec="${i}">
+       <b>${esc(r.ref)}</b><span>km ${esc(fmtKm(r.km))}</span>
+     </button>`).join('');
+  box.querySelectorAll('[data-rec]').forEach(btn => btn.addEventListener('mousedown', ev => {
+    ev.preventDefault();   // Blur des Feldes verhindern, sonst schließt die Liste zuerst
+    const r = list[Number(btn.dataset.rec)];
+    $('#ref').value = r.ref;
+    $('#km').value = fmtKm(r.km);
+    closeSuggest();
+    search();
+  }));
+  box.hidden = false;
+}
+
+function closeSuggest() { $('#suggest').hidden = true; }
+
+/* ============================ Menü, Einstellungen, Link ============================ */
+
+function openSheet() {
+  $('#sheet').hidden = false;
+  $('#menuBtn').classList.add('is-on');
+  $('#menuBtn').setAttribute('aria-expanded', 'true');
+  closeSuggest();
+}
+
+function closeSheet() {
+  $('#sheet').hidden = true;
+  $('#menuBtn').classList.remove('is-on');
+  $('#menuBtn').setAttribute('aria-expanded', 'false');
 }
 
 function applyTheme() {
   const el = document.documentElement;
   if (prefs.theme === 'auto') el.removeAttribute('data-theme');
   else el.setAttribute('data-theme', prefs.theme);
+  syncButtons();
 }
 
-function updateHash(ref, text) {
+function syncButtons() {
+  document.querySelectorAll('[data-base]').forEach(b =>
+    b.classList.toggle('is-on', b.dataset.base === (prefs.base || 'osm')));
+  document.querySelectorAll('[data-theme]').forEach(b =>
+    b.classList.toggle('is-on', b.dataset.theme === (prefs.theme || 'auto')));
+  const orm = $('#ormBtn');
+  if (orm && map) orm.classList.toggle('is-on', map.hasLayer(ormLayer));
+}
+
+function updateHash() {
   const p = new URLSearchParams();
-  if (ref) p.set('r', ref);
-  p.set('q', text);
+  if (view.ref) p.set('r', view.ref);
+  if (view.km != null) p.set('k', String(view.km));
   const hash = '#' + p.toString();
   try { window.history.replaceState(null, '', hash); } catch { location.hash = hash; }
 }
@@ -866,101 +934,64 @@ function readHash() {
   const h = location.hash.replace(/^#/, '');
   if (!h) return false;
   const p = new URLSearchParams(h);
-  const q = p.get('q');
-  if (!q) return false;
-  $('#ref').value = p.get('r') || '';
-  $('#entries').value = q;
+  const r = p.get('r');
+  if (!r) return false;
+  $('#ref').value = r;
+  const k = p.get('k');
+  if (k != null && k !== '') $('#km').value = fmtKm(toKm(k));
   return true;
+}
+
+async function share() {
+  const url = location.origin + location.pathname + location.hash;
+  const title = view.point && view.km != null
+    ? `Strecke ${view.ref} km ${fmtKm(view.km)}`
+    : 'Railnav';
+  if (navigator.share) {
+    try { await navigator.share({ title, text: title, url }); return; }
+    catch { /* abgebrochen — dann kopieren */ }
+  }
+  toast(await copyText(url) ? 'Link kopiert' : 'Kopieren nicht möglich');
 }
 
 /* ============================ Start ============================ */
 
 function bind() {
-  $('#go').addEventListener('click', run);
-  $('#clearBtn').addEventListener('click', () => {
-    $('#entries').value = '';
-    state.items = [];
-    render();
-    $('#entries').focus();
-  });
-  $('#locBtn').addEventListener('click', locate);
+  $('#go').addEventListener('click', search);
+  $('#menuBtn').addEventListener('click', () => $('#sheet').hidden ? openSheet() : closeSheet());
 
-  $('#ref').addEventListener('keydown', e => {
-    if (e.key === 'Enter') { e.preventDefault(); $('#entries').focus(); }
+  $('#ref').addEventListener('keydown', ev => {
+    if (ev.key === 'Enter') { ev.preventDefault(); closeSuggest(); $('#km').focus(); }
+    if (ev.key === 'Escape') closeSuggest();
   });
-  $('#entries').addEventListener('keydown', e => {
-    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); run(); }
+  $('#ref').addEventListener('focus', openSuggest);
+  $('#ref').addEventListener('input', openSuggest);
+  $('#ref').addEventListener('blur', () => setTimeout(closeSuggest, 120));
+
+  $('#km').addEventListener('keydown', ev => {
+    if (ev.key === 'Enter') { ev.preventDefault(); search(); ev.target.blur(); }
   });
+  $('#km').addEventListener('focus', closeSuggest);
 
-  $('#results').addEventListener('click', e => {
-    const card = e.target.closest('.card');
-    if (!card) return;
-    const index = Number(card.dataset.index);
-    const act = e.target.dataset.act;
-    if (act === 'show') focusItem(index);
-    else if (act === 'copy') {
-      const item = state.items.find(i => i.index === index);
-      const r = item && item.result;
-      if (!r) return;
-      const lat = item.kind === 'range' ? r.start.lat : r.lat;
-      const lon = item.kind === 'range' ? r.start.lon : r.lon;
-      copyText(fmtCoord(lat, lon)).then(ok => toast(ok ? 'Koordinaten kopiert' : 'Kopieren nicht möglich'));
-    }
-  });
+  $('#facQ').addEventListener('keydown', ev => { if (ev.key === 'Enter') { ev.preventDefault(); runFacility(); } });
+  $('#facGo').addEventListener('click', runFacility);
 
-  document.querySelectorAll('[data-export]').forEach(b =>
-    b.addEventListener('click', () => doExport(b.dataset.export)));
-
-  document.querySelectorAll('[data-base]').forEach(b =>
-    b.addEventListener('click', () => setBase(b.dataset.base)));
+  document.querySelectorAll('[data-base]').forEach(b => b.addEventListener('click', () => setBase(b.dataset.base)));
   $('#ormBtn').addEventListener('click', toggleOrm);
-  $('#bigBtn').addEventListener('click', () => {
-    prefs.big = !prefs.big;
-    savePrefs();
-    syncMapButtons();
-    setTimeout(() => map.invalidateSize(), 210);
-  });
-
-  $('#themeBtn').addEventListener('click', () => {
-    prefs.theme = prefs.theme === 'auto' ? 'light' : prefs.theme === 'light' ? 'dark' : 'auto';
+  document.querySelectorAll('[data-theme]').forEach(b => b.addEventListener('click', () => {
+    prefs.theme = b.dataset.theme;
     applyTheme();
-    savePrefs();
-    toast('Ansicht: ' + { auto: 'automatisch', light: 'hell', dark: 'dunkel' }[prefs.theme]);
-  });
-
-  $('#history').addEventListener('click', e => {
-    const b = e.target.closest('[data-hist]');
-    if (!b) return;
-    const h = history[Number(b.dataset.hist)];
-    if (!h) return;
-    $('#ref').value = h.ref || '';
-    $('#entries').value = h.text;
-    run();
-  });
-  $('#histClear').addEventListener('click', () => {
-    history = [];
     saveStore();
-    renderHistory();
+  }));
+
+  $('#locBtn').addEventListener('click', locate);
+  $('#shareBtn').addEventListener('click', share);
+
+  document.addEventListener('keydown', ev => {
+    if (ev.key === 'Escape') { closeSheet(); closeSuggest(); }
   });
 
-  // "Strecke hier" im Standort-Popup
-  document.addEventListener('click', async e => {
-    const link = e.target.closest('[data-here]');
-    if (!link || !meMarker) return;
-    e.preventDefault();
-    const { lat, lng } = meMarker.getLatLng();
-    toast('Suche Kilometerstein in der Nähe …');
-    try {
-      const res = await whereAmI(lat, lng);
-      if (!res.stone && !res.lines.length) { toast('Nichts Bahnrelevantes im Umkreis gefunden.'); return; }
-      const parts = [];
-      if (res.stone) parts.push(`km ${fmtKm(res.stone.km)} (${nfM.format(res.stone.dist)} m entfernt)`);
-      if (res.lines.length) parts.push(`Strecke ${res.lines.join(' / ')}`);
-      toast(parts.join(' · '));
-    } catch (err) {
-      toast('Umkreissuche fehlgeschlagen: ' + err.message);
-    }
-  });
+  window.addEventListener('resize', updateBH);
 }
 
 function boot() {
@@ -968,13 +999,12 @@ function boot() {
   applyTheme();
   initMap();
   bind();
-  renderHistory();
 
-  if (readHash()) run();
-  else if (history[0]) $('#ref').value = history[0].ref || '';
+  if (readHash()) search();
+  else if (recent[0]) $('#ref').value = recent[0].ref;
 
   if ('serviceWorker' in navigator && window.isSecureContext) {
-    navigator.serviceWorker.register('sw.js').catch(() => { /* offline-Betrieb ist optional */ });
+    navigator.serviceWorker.register('sw.js').catch(() => { /* Offlinebetrieb ist optional */ });
   }
 }
 

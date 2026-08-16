@@ -1,77 +1,97 @@
 # Railnav
 
 Streckennummer und Kilometer eingeben — Position auf der Karte sehen und in Google Maps öffnen.
+Oder umgekehrt: auf die Karte tippen und ablesen, welcher Kilometer das ist.
 
 Eine einzelne statische Webseite, kein Server, keine Anmeldung. Läuft auf dem Handy genauso wie
 am Rechner und lässt sich als App auf den Startbildschirm legen.
 
+**→ [steidlmichael2000-stack.github.io/railnav](https://steidlmichael2000-stack.github.io/railnav/)**
+
 ## Was es kann
 
-- **Mehrere Angaben auf einmal** — eine pro Zeile, gemischt aus verschiedenen Strecken.
-- **Übersichtskarte direkt in der App** — mit Bahn-Layer (OpenRailwayMap) und Luftbild,
-  bevor man überhaupt zu Google Maps wechselt.
-- **Zwischenwerte werden interpoliert.** Liegen Kilometersteine bei 12,0 und 13,0, wird für
-  km 12,4 zwischen beiden gerechnet — statt einfach den nächsten Stein zu zeigen.
-- **Ehrliche Abweichungsanzeige.** Ist für den gesuchten Kilometer nichts erfasst, steht in
-  Klartext da, welcher Stein stattdessen genommen wurde und wie weit der daneben liegt.
-  Die zugrunde liegende API antwortet im Umkreis von bis zu 10 km — das kann sonst leicht
-  übersehen werden.
-- **Abschnitte** — `16,0-17,2` zeichnet den Bereich als Linie auf die Karte.
-- **Betriebsstellen** — `@Karlsruhe Hbf` findet Bahnhöfe über Name, DS100 oder UIC-Nummer.
-- **Export** — Liste kopieren, CSV (Excel-tauglich), GPX für Navigationsgeräte, Link zum Teilen.
+- **Beide Richtungen.** Strecke + km → Position, und Tippen auf die Karte → Strecke + km.
+- **Kilometersteine sind sichtbar.** Alle erfassten Steine der Strecke stehen beschriftet auf der
+  Karte, verbunden zu einer Linie. Man sieht also, worauf sich die Angabe stützt — und kann einen
+  Stein direkt antippen, statt zu interpolieren.
+- **Ehrliche Genauigkeitsangabe.** Zu jedem interpolierten Punkt steht dabei, wie weit er
+  danebenliegen kann (siehe unten).
+- **Karte, Luftbild und Bahn-Layer** umschaltbar, eigener Standort, Link zum Teilen,
+  Betriebsstellensuche über Name, DS100 oder UIC.
 - **Offlinefähig** — die App selbst und bereits geladene Kartenkacheln bleiben ohne Netz nutzbar.
-- **Eigener Standort** auf der Karte, inklusive grober Rückwärtssuche „welcher Kilometer ist hier?".
 
-## Eingabeformate
+Eingabe: `12,5` oder `12.5`, auch Hektometer-Schreibweise `14+250` (= km 14,250).
+Nur die Streckennummer ohne Kilometer zeigt den Streckenverlauf.
 
-| Eingabe | Bedeutung |
-| --- | --- |
-| `12,5` | Kilometer auf der oben eingetragenen Strecke |
-| `5100 12,5` | Streckennummer direkt in der Zeile |
-| `14+250` | Hektometer-Schreibweise = km 14,250 |
-| `16,0-17,2` | Abschnitt, wird als Linie gezeichnet |
-| `12,5 \| Text` | eigene Bezeichnung für den Punkt |
-| `@Karlsruhe Hbf` | Betriebsstelle suchen |
-| `# Text` | Kommentarzeile, wird übersprungen |
-
-Punkt oder Komma als Dezimaltrennzeichen, beides geht. Füllwörter wie „Strecke" oder „km"
-werden ignoriert, `5100; 12,5` und `5100 / 12,5` funktionieren ebenfalls.
-
-`Strg`+`Enter` im Textfeld startet die Suche.
-
-## Datenquelle und Grenzen
+## Wie genau ist das?
 
 Die Positionen stammen aus den in [OpenStreetMap](https://www.openstreetmap.org/) erfassten
 Kilometersteinen (`railway=milestone`), abgefragt über die
-[OpenRailwayMap-API v2](https://wiki.openstreetmap.org/wiki/OpenRailwayMap/API).
+[OpenRailwayMap-API v2](https://wiki.openstreetmap.org/wiki/OpenRailwayMap/API). Liegt für den
+gesuchten Kilometer ein Stein vor, ist die Position so gut wie dessen Erfassung. Sonst wird
+zwischen den beiden Nachbarsteinen **geradlinig** interpoliert — und genau da entsteht der Fehler:
+im Bogen liegt die Sehne innerhalb des Gleisbogens.
 
-Daraus ergeben sich zwei Dinge, die man wissen sollte:
+Die Abweichung folgt $s \approx L^2/(8R)$ mit $L$ = Steinabstand und $R$ = Bogenhalbmesser. Statt
+$R$ zu raten, wurde der Fehler gemessen: auf zwölf Strecken (1700, 1720, 2200, 2550, 2650, 3600,
+4000, 4201, 5100, 5200, 6100, 6340) wurde über **1146 Steinpaare** jeweils ein Stein übersprungen,
+über die Lücke interpoliert und mit seiner tatsächlichen Lage verglichen.
 
-1. **Die Abdeckung schwankt stark.** Auf manchen Strecken steht alle 100 m ein erfasster Stein,
-   auf anderen über viele Kilometer keiner. Ohne passende Nachbarpunkte kann nicht interpoliert
-   werden — dann zeigt die App den nächstgelegenen Stein und schreibt die Abweichung dazu.
-2. **Interpoliert wird geradlinig.** Zwischen zwei Steinen wird linear gerechnet; im Bogen
-   weicht das Ergebnis von der tatsächlichen Gleislage ab. Passt der Luftlinienabstand nicht
-   zur Kilometerdifferenz (Kilometersprung, enger Bogen), weist die App darauf hin.
+| | Abweichung | entspricht R |
+| --- | --- | --- |
+| Median | $L^2/9700$ | ≈ 1200 m |
+| 90. Perzentil | $L^2/2900$ | ≈ 360 m |
 
-**Das ist keine amtliche Quelle.** Zur groben Verortung im Gelände gut geeignet, nicht für
-Vermessung, Disposition oder sicherheitsrelevante Entscheidungen.
+In der Praxis:
+
+| Steinabstand | typisch | ungünstige 10 % |
+| --- | --- | --- |
+| 100 m | 1 m | 3 m |
+| 200 m | 4 m | 14 m |
+| 500 m | 26 m | 86 m |
+| 1000 m | 103 m | 345 m |
+
+**Der Steinabstand entscheidet, nicht die Rechnung.** Wo alle 100–200 m eine Tafel erfasst ist,
+liegt man im einstelligen Meterbereich. Wo nur alle 500 m oder 1 km ein Stein steht, kann es im
+Bogen dreistellig werden. Die App schreibt den Steinabstand und beide Werte zu jedem Punkt dazu
+und warnt, sobald es kritisch wird.
+
+Ein früher eingebauter Schätzer, der den Bogenhalbmesser aus drei benachbarten Steinen berechnet,
+wurde wieder entfernt: Er lag in fast der Hälfte der Fälle zu **niedrig**, weil die Streuung der
+erfassten Steine bei kurzen Abständen voll durchschlägt. Eine zu optimistische Zahl ist schlimmer
+als gar keine.
+
+### Zwei weitere Fallstricke, die die App abfängt
+
+1. **Die API antwortet unsortiert.** Sie liefert Steine im Umkreis von 10 km um die angefragte
+   Position und kappt bei `limit`. Mit `limit=1` bekommt man deshalb einen quasi beliebigen Stein
+   aus diesem Fenster — für Strecke 5100 km 12,5 etwa den bei km 20,8. Railnav lädt bis zu 200
+   Steine und sucht das passende Paar selbst.
+2. **Streckennummern tauchen mehrfach auf.** Auf Strecke 4201 liegen Steine, deren Kilometerwerte
+   nur 165 m auseinanderliegen, geografisch aber 28 km. Ohne Prüfung würde quer durchs Land
+   interpoliert. Railnav verwirft Paare, deren Luftlinie länger ist als die Kilometerdifferenz
+   zulässt.
+
+## Grenzen
+
+**Keine amtliche Quelle.** Zur groben Verortung im Gelände gut geeignet, nicht für Vermessung,
+Disposition oder sicherheitsrelevante Entscheidungen.
+
+Das Tippen auf die Karte funktioniert ohne Netzabfrage, solange die Strecke schon geladen ist.
+Wird weit abseits getippt, muss [Overpass](https://overpass-api.de/) beantworten, welche Strecke
+dort liegt — das dauert einige Sekunden, ist aus manchen Netzen gesperrt, und an Knotenbahnhöfen
+liegen mehrere Strecken nebeneinander. Dann fragt die App nach, sortiert nach Abstand zum Tippen.
 
 ## Selbst betreiben
 
-Es reicht, die Dateien auf einen beliebigen Webspace zu legen — es gibt keinen Build-Schritt.
-
+Es gibt keinen Build-Schritt — die Dateien auf einen beliebigen Webspace legen genügt.
 Lokal zum Ausprobieren:
 
 ```bash
 python -m http.server 8000
 ```
 
-Dann `http://localhost:8000` öffnen. Über `file://` funktionieren Standortbestimmung und
-Offline-Modus nicht, der Rest schon.
-
-Auf GitHub Pages veröffentlichen: in den Repository-Einstellungen unter *Pages* als Quelle
-den Branch `main` und den Ordner `/ (root)` wählen.
+Über `file://` funktionieren Standortbestimmung und Offline-Modus nicht, der Rest schon.
 
 ## Lizenz und Attribution
 
