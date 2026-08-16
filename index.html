@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Railnav — Streckenkilometer verorten</title>
+<meta name="description" content="Streckennummer und Kilometer eingeben, Position auf der Karte sehen und in Google Maps öffnen. Mehrere Punkte gleichzeitig, Abschnitte, Betriebsstellen, GPX-Export.">
+<meta name="theme-color" content="#14181d">
+<meta name="color-scheme" content="dark light">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Railnav">
+<link rel="stylesheet" href="vendor/leaflet.css">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <svg class="logo" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M7 3h10a2 2 0 0 1 2 2v9a3 3 0 0 1-3 3H8a3 3 0 0 1-3-3V5a2 2 0 0 1 2-2Z"/>
+      <rect class="win" x="7.6" y="5.6" width="8.8" height="4.6" rx="1"/>
+      <circle class="dot" cx="9" cy="13.6" r="1.1"/><circle class="dot" cx="15" cy="13.6" r="1.1"/>
+      <path class="rail" d="m8 17-2 4M16 17l2 4M5.5 20h13"/>
+    </svg>
+    <div>
+      <h1>Railnav</h1>
+      <p class="tagline">Strecke&nbsp;+&nbsp;km → Position</p>
+    </div>
+  </div>
+  <button id="themeBtn" class="icon-btn" type="button" title="Hell / Dunkel umschalten" aria-label="Hell / Dunkel umschalten">
+    <span aria-hidden="true">◐</span>
+  </button>
+</header>
+
+<main>
+
+  <section class="panel" aria-labelledby="inputHead">
+    <h2 id="inputHead" class="sr-only">Eingabe</h2>
+
+    <div class="field">
+      <label for="ref">Strecke (VzG)
+        <span class="opt">gilt für alle Zeilen ohne eigene Nummer</span>
+      </label>
+      <input id="ref" type="text" inputmode="numeric" placeholder="z. B. 5100" autocomplete="off" spellcheck="false" enterkeyhint="next">
+    </div>
+
+    <div class="field">
+      <label for="entries">Kilometer
+        <span class="opt">eine Angabe pro Zeile</span>
+      </label>
+      <textarea id="entries" rows="4" spellcheck="false" autocomplete="off" enterkeyhint="done"
+        placeholder="12,5&#10;14+250&#10;5100 16,0-17,2 | Langsamfahrstelle&#10;@Karlsruhe Hbf"></textarea>
+    </div>
+
+    <div class="actions">
+      <button id="go" class="btn primary" type="button">Punkte suchen</button>
+      <button id="locBtn" class="btn ghost" type="button" title="Eigenen Standort auf der Karte zeigen">Standort</button>
+      <button id="clearBtn" class="btn ghost" type="button">Leeren</button>
+    </div>
+
+    <details class="help">
+      <summary>Welche Eingaben gehen?</summary>
+      <dl>
+        <dt><code>12,5</code></dt><dd>Kilometer auf der oben gesetzten Strecke</dd>
+        <dt><code>5100 12,5</code></dt><dd>Streckennummer direkt in der Zeile</dd>
+        <dt><code>14+250</code></dt><dd>Hektometer-Schreibweise = km 14,250</dd>
+        <dt><code>16,0-17,2</code></dt><dd>Abschnitt — wird als Linie auf der Karte gezeichnet</dd>
+        <dt><code>12,5 | Text</code></dt><dd>eigene Bezeichnung für den Punkt</dd>
+        <dt><code>@Karlsruhe Hbf</code></dt><dd>Betriebsstelle suchen (Name, DS100 oder UIC)</dd>
+        <dt><code># Text</code></dt><dd>Kommentarzeile, wird übersprungen</dd>
+      </dl>
+      <p class="note">Punkt oder Komma als Dezimaltrennzeichen — beides geht. Trennzeichen zwischen
+      Strecke und Kilometer: Leerzeichen, Semikolon oder Schrägstrich.</p>
+    </details>
+  </section>
+
+  <section class="panel map-panel" aria-labelledby="mapHead">
+    <div class="panel-head">
+      <h2 id="mapHead">Karte</h2>
+      <div class="seg" role="group" aria-label="Kartenhintergrund">
+        <button class="seg-btn is-on" type="button" data-base="osm">Karte</button>
+        <button class="seg-btn" type="button" data-base="sat">Luftbild</button>
+        <button class="seg-btn is-on" type="button" id="ormBtn" title="Bahn-Layer von OpenRailwayMap">Bahn</button>
+        <button class="seg-btn" type="button" id="bigBtn" title="Karte vergrößern">⤢</button>
+      </div>
+    </div>
+    <div id="map" role="application" aria-label="Übersichtskarte der gefundenen Punkte"></div>
+  </section>
+
+  <section id="resultsPanel" class="results" aria-live="polite" aria-labelledby="resHead">
+    <h2 id="resHead" class="sr-only">Ergebnisse</h2>
+    <div id="results"></div>
+  </section>
+
+  <section id="exportPanel" class="panel export" hidden>
+    <div class="panel-head"><h2>Weitergeben</h2></div>
+    <div class="actions wrap">
+      <button class="btn ghost" type="button" data-export="copy">Liste kopieren</button>
+      <button class="btn ghost" type="button" data-export="csv">CSV</button>
+      <button class="btn ghost" type="button" data-export="gpx">GPX</button>
+      <button class="btn ghost" type="button" data-export="link">Link teilen</button>
+    </div>
+  </section>
+
+  <section id="historyPanel" class="panel" hidden>
+    <div class="panel-head">
+      <h2>Zuletzt gesucht</h2>
+      <button class="link-btn" type="button" id="histClear">löschen</button>
+    </div>
+    <div id="history" class="chips"></div>
+  </section>
+
+  <footer>
+    <p><strong>Keine amtliche Quelle.</strong> Die Positionen stammen aus in OpenStreetMap erfassten
+    Kilometersteinen und sind nur zur groben Orientierung geeignet — nicht für Vermessung,
+    Disposition oder sicherheitsrelevante Entscheidungen.</p>
+    <p>Daten: © OpenStreetMap-Mitwirkende · Abfrage über die
+      <a href="https://wiki.openstreetmap.org/wiki/OpenRailwayMap/API" target="_blank" rel="noopener">OpenRailwayMap-API</a> ·
+      Bahn-Layer: OpenRailwayMap (CC-BY-SA&nbsp;2.0)</p>
+  </footer>
+
+</main>
+
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+<script src="vendor/leaflet.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
