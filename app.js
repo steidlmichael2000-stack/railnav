@@ -654,6 +654,76 @@ function wmsApply(sichtbar) {
   syncButtons();
 }
 
+/* GetCapabilities auswerten: Layer-Namen und Koordinatensysteme.
+ * Namensräume ignorieren — WMS 1.3.0 setzt einen Default-Namespace, an dem
+ * querySelector scheitert. */
+function parseWmsCapabilities(xmlText) {
+  const doc = new DOMParser().parseFromString(xmlText, 'application/xml');
+  if (doc.getElementsByTagName('parsererror').length) throw new Error('kein gültiges XML');
+
+  const layers = [];
+  for (const el of doc.getElementsByTagNameNS('*', 'Layer')) {
+    // Nur direkte Kinder ansehen, sonst erbt jede Gruppe den Namen ihrer Unterlayer
+    let name = '', title = '';
+    for (const c of el.children) {
+      if (c.localName === 'Name' && !name) name = c.textContent.trim();
+      if (c.localName === 'Title' && !title) title = c.textContent.trim();
+    }
+    if (name) layers.push({ name, title });
+  }
+
+  const crs = new Set();
+  for (const tag of ['CRS', 'SRS']) {
+    for (const el of doc.getElementsByTagNameNS('*', tag)) {
+      const v = el.textContent.trim();
+      if (v) crs.add(v);
+    }
+  }
+  return { layers, crs: [...crs], webMercator: [...crs].some(c => /EPSG:(3857|900913)/i.test(c)) };
+}
+
+function wmsShowLayers(caps) {
+  const box = $('#wmsList');
+  if (!caps.layers.length) { box.innerHTML = '<p class="fine">Keine benannten Layer gefunden.</p>'; return; }
+
+  const hinweis = caps.crs.length
+    ? `<p class="fine">${caps.webMercator
+        ? 'EPSG:3857 wird unterstützt — passt.'
+        : 'Achtung: EPSG:3857 ist nicht dabei. Der Layer bleibt vermutlich leer.'}</p>`
+    : '';
+
+  box.innerHTML = hinweis + caps.layers.slice(0, 25).map((l, i) =>
+    `<button class="fac-item" type="button" data-wl="${i}">${esc(l.name)}` +
+    `${l.title && l.title !== l.name ? `<small>${esc(l.title)}</small>` : ''}</button>`).join('');
+
+  box.querySelectorAll('[data-wl]').forEach(btn => btn.addEventListener('click', () => {
+    const l = caps.layers[Number(btn.dataset.wl)];
+    $('#wmsLayers').value = l.name;
+    prefs.wms.layers = l.name;
+    saveStore();
+    wmsApply(true);
+    toast('Layer „' + l.name + '" eingestellt.');
+  }));
+}
+
+async function wmsLoadLayers() {
+  const url = ($('#wmsUrl').value || '').trim();
+  if (!url) { toast('Bitte zuerst die Adresse des Dienstes eintragen.'); return; }
+  $('#wmsList').innerHTML = '<p class="fine">Frage den Dienst …</p>';
+  const sep = url.includes('?') ? '&' : '?';
+  try {
+    const r = await fetch(url + sep + 'SERVICE=WMS&REQUEST=GetCapabilities');
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    wmsShowLayers(parseWmsCapabilities(await r.text()));
+    $('#wmsPaste').hidden = true;
+  } catch (err) {
+    // Typischer Fall bei geschützten Diensten: keine CORS-Freigabe
+    $('#wmsList').innerHTML = `<p class="fine">Direktabfrage nicht möglich (${esc(err.message)}). ` +
+      `Bitte über <em>Anmelden</em> öffnen, dort alles kopieren und unten einfügen.</p>`;
+    $('#wmsPaste').hidden = false;
+  }
+}
+
 function wmsLogin() {
   const url = (prefs.wms.url || '').trim();
   if (!url) { toast('Bitte zuerst die Adresse des Dienstes eintragen.'); return; }
@@ -1357,6 +1427,13 @@ function bind() {
 
   $('#wmsLogin').addEventListener('click', () => { wmsSave(); wmsLogin(); });
   $('#wmsToggle').addEventListener('click', () => { wmsSave(); wmsApply(!prefs.wms.on); });
+  $('#wmsLoad').addEventListener('click', () => { wmsSave(); wmsLoadLayers(); });
+  $('#wmsParse').addEventListener('click', () => {
+    const xml = $('#wmsXml').value.trim();
+    if (!xml) { toast('Bitte das XML einfügen.'); return; }
+    try { wmsShowLayers(parseWmsCapabilities(xml)); }
+    catch (err) { toast('XML nicht lesbar: ' + err.message); }
+  });
 
   document.addEventListener('keydown', ev => {
     if (ev.key === 'Escape') { closeSheet(); closeSuggest(); }

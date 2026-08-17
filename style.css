@@ -226,7 +226,16 @@ body {
 }
 .slider-row input[type="range"] { flex: 1; accent-color: var(--accent); }
 
+.stack textarea {
+  width: 100%; padding: 11px 13px; font: inherit; font-size: .82rem;
+  border: 1px solid var(--line); border-radius: 11px; resize: vertical;
+  background: var(--panel-2); color: var(--text); outline: none;
+}
+.stack textarea:focus { border-color: var(--accent); }
+
 .row { display: flex; gap: 8px; }
+.row.wrap { flex-wrap: wrap; }
+.row.wrap .btn { flex: 1 1 30%; }
 .row input {
   flex: 1; min-width: 0;
   padding: 11px 13px; font: inherit; font-size: .95rem;
