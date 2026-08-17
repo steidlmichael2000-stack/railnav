@@ -19,6 +19,12 @@
 
 <div id="map" role="application" aria-label="Karte mit Kilometersteinen der Strecke"></div>
 
+<!-- Erscheint nur, wenn die Karte gedreht ist: zurück auf Nordausrichtung -->
+<button id="northBtn" class="north" type="button" hidden aria-label="Karte nach Norden ausrichten">
+  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.6l4.4 16L12 15.2 7.6 18.6z"/></svg>
+  <span>N</span>
+</button>
+
 <div class="ui">
 
   <!-- ---------- obere Leiste ---------- -->
@@ -65,6 +71,11 @@
         <button class="seg-btn" type="button" data-base="sat">Luftbild</button>
         <button class="seg-btn" type="button" id="ormBtn">Bahn-Layer</button>
       </div>
+      <label class="slider-row" for="baseOpacity">Hintergrund
+        <input id="baseOpacity" type="range" min="0" max="100" step="5" value="100">
+        <span id="baseOpacityVal" class="slider-val">100&thinsp;%</span>
+      </label>
+      <p class="fine">Ganz nach links heruntergezogen bleibt nur der Bahn- bzw. WMS-Layer stehen.</p>
     </section>
 
     <section class="sheet-sec">
@@ -108,6 +119,9 @@
         <button class="seg-btn" type="button" data-theme="light">Hell</button>
         <button class="seg-btn" type="button" data-theme="dark">Dunkel</button>
       </div>
+      <div class="seg" role="group" aria-label="Kartendrehung" id="rotateGroup" style="margin-top:7px" hidden>
+        <button class="seg-btn" type="button" id="rotateBtn">Drehen mit zwei Fingern</button>
+      </div>
     </section>
 
     <section class="sheet-sec">
@@ -139,6 +153,11 @@
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
 <script src="vendor/leaflet.js"></script>
+<!-- Kartendrehung: Leaflet kann das nicht von Haus aus. Die Erweiterung
+     leaflet-rotate leistet es, steht aber unter GPL-3.0 und ist mit der
+     MIT-Lizenz dieses Projekts nicht vereinbar. Der Code hier ist darauf
+     vorbereitet: Liegt "vendor/leaflet-rotate.js" vor und wird hier
+     eingebunden, schaltet sich die Drehung samt Nordknopf von selbst frei. -->
 <script src="app.js"></script>
 </body>
 </html>

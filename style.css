@@ -88,6 +88,23 @@ body {
 .leaflet-bar a, .leaflet-bar a:hover { background: var(--glass); color: var(--text); border-bottom-color: var(--line); }
 .leaflet-touch .leaflet-bar a { width: 34px; height: 34px; line-height: 34px; }
 
+/* Nordknopf — sitzt frei über der Karte, links über der unteren Leiste */
+.north {
+  position: fixed;
+  left: calc(var(--gap) + 4px);
+  bottom: calc(var(--bh) + 54px + env(safe-area-inset-bottom));
+  z-index: 450;
+  width: 42px; height: 42px;
+  display: grid; place-items: center; gap: 0;
+  border-radius: 50%; border: 1px solid var(--line);
+  background: var(--glass); color: var(--text);
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+  cursor: pointer;
+}
+.north svg { width: 20px; height: 20px; fill: var(--bad); grid-area: 1/1; margin-top: -6px; }
+.north span { grid-area: 1/1; font-size: .58rem; font-weight: 700; margin-top: 12px; color: var(--muted); }
+
 /* ---------- schwebende Bedienung ---------- */
 
 .ui {
@@ -225,6 +242,7 @@ body {
   font-size: .8rem; color: var(--muted);
 }
 .slider-row input[type="range"] { flex: 1; accent-color: var(--accent); }
+.slider-val { flex: none; min-width: 3.4em; text-align: right; font-variant-numeric: tabular-nums; }
 
 .stack textarea {
   width: 100%; padding: 11px 13px; font: inherit; font-size: .82rem;

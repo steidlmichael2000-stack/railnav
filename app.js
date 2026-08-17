@@ -51,6 +51,13 @@ const OVERPASS = [
 /* ============================ Helfer ============================ */
 
 const $ = sel => document.querySelector(sel);
+
+/* Ereignis und Wert nur setzen, wenn das Element existiert.
+ * Passen HTML und Skript einmal nicht zusammen — etwa weil der Browser eine
+ * ältere Seite aus dem Cache hält —, soll nicht die ganze App an einer
+ * fehlenden Schaltfläche scheitern. */
+const on = (sel, ev, fn) => { const el = $(sel); if (el) el.addEventListener(ev, fn); return el; };
+const setVal = (sel, v) => { const el = $(sel); if (el) el.value = v; };
 const nfKm = new Intl.NumberFormat('de-DE', { minimumFractionDigits: 1, maximumFractionDigits: 3 });
 const nfM = new Intl.NumberFormat('de-DE', { maximumFractionDigits: 0 });
 
@@ -544,7 +551,7 @@ const view = {
 };
 
 let prefs = {
-  theme: 'auto', base: 'osm', orm: true,
+  theme: 'auto', base: 'osm', orm: true, baseOpacity: 100,
   wms: { url: '', layers: '', opacity: 75, on: false }   // nur Adresse und Layer, nie Zugangsdaten
 };
 let recent = [];   // nicht "history" nennen — das ist window.history
@@ -555,8 +562,13 @@ let map, baseOsm, baseSat, ormLayer, msLayer, trackLayer, pointLayer, meLayer;
 let pointMarker = null;
 
 function initMap() {
-  map = L.map('map', { zoomControl: false, attributionControl: true, tap: true })
-    .setView([51.1, 10.3], 6);
+  map = L.map('map', {
+    zoomControl: false, attributionControl: true, tap: true,
+    // Drehung über leaflet-rotate; eigener Nordknopf statt des mitgelieferten
+    rotate: true, rotateControl: false,
+    touchRotate: prefs.rotate !== false,
+    bearing: 0
+  }).setView([51.1, 10.3], 6);
 
   baseOsm = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
     maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
@@ -580,11 +592,24 @@ function initMap() {
 
   if (prefs.orm !== false) ormLayer.addTo(map);
   if (prefs.base === 'sat') setBase('sat');
+  applyBaseOpacity();
   if (prefs.wms && prefs.wms.on) wmsApply(true);
 
   map.on('click', onMapClick);
   map.on('zoomend', drawMilestones);
+  map.on('rotate rotateend', syncNorth);
+  syncNorth();
   syncButtons();
+}
+
+/** Nordknopf nur zeigen, wenn die Karte tatsächlich gedreht ist. */
+function syncNorth() {
+  const btn = $('#northBtn');
+  if (!btn || !map.getBearing) return;
+  const b = map.getBearing() || 0;
+  btn.hidden = Math.abs(((b % 360) + 360) % 360) < 0.5;
+  const pfeil = btn.querySelector('svg');
+  if (pfeil) pfeil.style.transform = `rotate(${-b}deg)`;
 }
 
 function setBase(which) {
@@ -593,9 +618,20 @@ function setBase(which) {
   const off = which === 'sat' ? baseOsm : baseSat;
   if (map.hasLayer(off)) map.removeLayer(off);
   if (!map.hasLayer(on)) on.addTo(map);
+  applyBaseOpacity();
+  if (wmsLayer) wmsLayer.bringToFront();
   if (map.hasLayer(ormLayer)) ormLayer.bringToFront();
   saveStore();
   syncButtons();
+}
+
+/** Hintergrund verblassen, damit Bahn- oder WMS-Layer allein lesbar werden. */
+function applyBaseOpacity() {
+  const o = (prefs.baseOpacity == null ? 100 : prefs.baseOpacity) / 100;
+  if (baseOsm) baseOsm.setOpacity(o);
+  if (baseSat) baseSat.setOpacity(o);
+  const val = $('#baseOpacityVal');
+  if (val) val.textContent = Math.round(o * 100) + ' %';
 }
 
 function toggleOrm() {
@@ -627,7 +663,11 @@ function wmsBuild() {
   const layer = L.tileLayer.wms(url, {
     layers, format: 'image/png', transparent: true, version: '1.3.0',
     opacity: (prefs.wms.opacity || 75) / 100,
-    crossOrigin: false        // kein CORS anfordern, sonst scheitert der Abruf
+    crossOrigin: false,       // kein CORS anfordern, sonst scheitert der Abruf
+    // Leaflet setzt bei Kachel-Layern standardmäßig maxZoom 18 — der Layer
+    // verschwände dann beim Hineinzoomen. Ein WMS rendert jeden Maßstab auf
+    // Anfrage, es gibt also keine natürliche Obergrenze.
+    maxZoom: 22
   });
 
   wmsFehler = 0;
@@ -664,12 +704,20 @@ function parseWmsCapabilities(xmlText) {
   const layers = [];
   for (const el of doc.getElementsByTagNameNS('*', 'Layer')) {
     // Nur direkte Kinder ansehen, sonst erbt jede Gruppe den Namen ihrer Unterlayer
-    let name = '', title = '';
+    let name = '', title = '', minScale = null, maxScale = null;
     for (const c of el.children) {
       if (c.localName === 'Name' && !name) name = c.textContent.trim();
       if (c.localName === 'Title' && !title) title = c.textContent.trim();
+      // Maßstabsgrenzen erklären, warum ein Layer beim Zoomen verschwindet
+      if (c.localName === 'MinScaleDenominator') minScale = parseFloat(c.textContent);
+      if (c.localName === 'MaxScaleDenominator') maxScale = parseFloat(c.textContent);
+      if (c.localName === 'ScaleHint') {              // WMS 1.1.1
+        const mn = parseFloat(c.getAttribute('min')), mx = parseFloat(c.getAttribute('max'));
+        if (isFinite(mn)) minScale = mn / 0.00028;
+        if (isFinite(mx)) maxScale = mx / 0.00028;
+      }
     }
-    if (name) layers.push({ name, title });
+    if (name) layers.push({ name, title, minScale, maxScale });
   }
 
   const crs = new Set();
@@ -692,9 +740,14 @@ function wmsShowLayers(caps) {
         : 'Achtung: EPSG:3857 ist nicht dabei. Der Layer bleibt vermutlich leer.'}</p>`
     : '';
 
-  box.innerHTML = hinweis + caps.layers.slice(0, 25).map((l, i) =>
-    `<button class="fac-item" type="button" data-wl="${i}">${esc(l.name)}` +
-    `${l.title && l.title !== l.name ? `<small>${esc(l.title)}</small>` : ''}</button>`).join('');
+  box.innerHTML = hinweis + caps.layers.slice(0, 25).map((l, i) => {
+    const grenzen = [];
+    if (isFinite(l.minScale) && l.minScale) grenzen.push('nicht näher als 1:' + nfM.format(l.minScale));
+    if (isFinite(l.maxScale) && l.maxScale) grenzen.push('nicht weiter als 1:' + nfM.format(l.maxScale));
+    const unter = [l.title !== l.name ? l.title : '', grenzen.join(' · ')].filter(Boolean).join(' — ');
+    return `<button class="fac-item" type="button" data-wl="${i}">${esc(l.name)}` +
+      `${unter ? `<small>${esc(unter)}</small>` : ''}</button>`;
+  }).join('');
 
   box.querySelectorAll('[data-wl]').forEach(btn => btn.addEventListener('click', () => {
     const l = caps.layers[Number(btn.dataset.wl)];
@@ -1333,6 +1386,12 @@ function syncButtons() {
   const orm = $('#ormBtn');
   if (orm && map) orm.classList.toggle('is-on', map.hasLayer(ormLayer));
 
+  // Drehung nur anbieten, wenn die Erweiterung überhaupt eingebunden ist
+  const rg = $('#rotateGroup');
+  if (rg) rg.hidden = !(map && typeof map.setBearing === 'function');
+  const rb = $('#rotateBtn');
+  if (rb) rb.classList.toggle('is-on', prefs.rotate !== false);
+
   const wt = $('#wmsToggle');
   if (wt) {
     wt.classList.toggle('is-on', !!(prefs.wms && prefs.wms.on));
@@ -1375,61 +1434,85 @@ async function share() {
 /* ============================ Start ============================ */
 
 function bind() {
-  $('#go').addEventListener('click', search);
-  $('#menuBtn').addEventListener('click', () => $('#sheet').hidden ? openSheet() : closeSheet());
+  on('#go', 'click', search);
+  on('#menuBtn', 'click', () => $('#sheet').hidden ? openSheet() : closeSheet());
 
-  $('#ref').addEventListener('keydown', ev => {
+  on('#ref', 'keydown', ev => {
     if (ev.key === 'Enter') { ev.preventDefault(); closeSuggest(); $('#km').focus(); }
     if (ev.key === 'Escape') closeSuggest();
   });
-  $('#ref').addEventListener('focus', openSuggest);
-  $('#ref').addEventListener('input', openSuggest);
-  $('#ref').addEventListener('blur', () => setTimeout(closeSuggest, 120));
+  on('#ref', 'focus', openSuggest);
+  on('#ref', 'input', openSuggest);
+  on('#ref', 'blur', () => setTimeout(closeSuggest, 120));
 
-  $('#km').addEventListener('keydown', ev => {
+  on('#km', 'keydown', ev => {
     if (ev.key === 'Enter') { ev.preventDefault(); search(); ev.target.blur(); }
   });
-  $('#km').addEventListener('focus', closeSuggest);
+  on('#km', 'focus', closeSuggest);
 
-  $('#facQ').addEventListener('keydown', ev => { if (ev.key === 'Enter') { ev.preventDefault(); runFacility(); } });
-  $('#facGo').addEventListener('click', runFacility);
+  on('#facQ', 'keydown', ev => { if (ev.key === 'Enter') { ev.preventDefault(); runFacility(); } });
+  on('#facGo', 'click', runFacility);
 
   document.querySelectorAll('[data-base]').forEach(b => b.addEventListener('click', () => setBase(b.dataset.base)));
-  $('#ormBtn').addEventListener('click', toggleOrm);
+  on('#ormBtn', 'click', toggleOrm);
   document.querySelectorAll('[data-theme]').forEach(b => b.addEventListener('click', () => {
     prefs.theme = b.dataset.theme;
     applyTheme();
     saveStore();
   }));
 
-  $('#locBtn').addEventListener('click', locate);
-  $('#shareBtn').addEventListener('click', share);
+  setVal('#baseOpacity', prefs.baseOpacity == null ? 100 : prefs.baseOpacity);
+  on('#baseOpacity', 'input', ev => {
+    prefs.baseOpacity = Number(ev.target.value);
+    applyBaseOpacity();
+  });
+  on('#baseOpacity', 'change', saveStore);
+
+  on('#northBtn', 'click', () => {
+    if (map.setBearing) map.setBearing(0);
+    syncNorth();
+  });
+
+  on('#rotateBtn', 'click', () => {
+    prefs.rotate = !(prefs.rotate !== false);
+    if (map.touchRotate) {
+      if (prefs.rotate) map.touchRotate.enable();
+      else { map.touchRotate.disable(); if (map.setBearing) map.setBearing(0); syncNorth(); }
+    }
+    saveStore();
+    syncButtons();
+  });
+
+  on('#locBtn', 'click', locate);
+  on('#shareBtn', 'click', share);
 
   // WMS: Adresse und Layer merken, Zugangsdaten bleiben beim Browser
-  $('#wmsUrl').value = prefs.wms.url || '';
-  $('#wmsLayers').value = prefs.wms.layers || '';
-  $('#wmsOpacity').value = prefs.wms.opacity || 75;
+  setVal('#wmsUrl', prefs.wms.url || '');
+  setVal('#wmsLayers', prefs.wms.layers || '');
+  setVal('#wmsOpacity', prefs.wms.opacity || 75);
 
   const wmsSave = () => {
-    prefs.wms.url = $('#wmsUrl').value.trim();
-    prefs.wms.layers = $('#wmsLayers').value.trim();
+    const u = $('#wmsUrl'), l = $('#wmsLayers');
+    if (u) prefs.wms.url = u.value.trim();
+    if (l) prefs.wms.layers = l.value.trim();
     saveStore();
     if (prefs.wms.on) wmsApply(true);      // mit neuen Angaben neu aufbauen
   };
-  $('#wmsUrl').addEventListener('change', wmsSave);
-  $('#wmsLayers').addEventListener('change', wmsSave);
+  on('#wmsUrl', 'change', wmsSave);
+  on('#wmsLayers', 'change', wmsSave);
 
-  $('#wmsOpacity').addEventListener('input', ev => {
+  on('#wmsOpacity', 'input', ev => {
     prefs.wms.opacity = Number(ev.target.value);
     if (wmsLayer) wmsLayer.setOpacity(prefs.wms.opacity / 100);
   });
-  $('#wmsOpacity').addEventListener('change', saveStore);
+  on('#wmsOpacity', 'change', saveStore);
 
-  $('#wmsLogin').addEventListener('click', () => { wmsSave(); wmsLogin(); });
-  $('#wmsToggle').addEventListener('click', () => { wmsSave(); wmsApply(!prefs.wms.on); });
-  $('#wmsLoad').addEventListener('click', () => { wmsSave(); wmsLoadLayers(); });
-  $('#wmsParse').addEventListener('click', () => {
-    const xml = $('#wmsXml').value.trim();
+  on('#wmsLogin', 'click', () => { wmsSave(); wmsLogin(); });
+  on('#wmsToggle', 'click', () => { wmsSave(); wmsApply(!prefs.wms.on); });
+  on('#wmsLoad', 'click', () => { wmsSave(); wmsLoadLayers(); });
+  on('#wmsParse', 'click', () => {
+    const el = $('#wmsXml');
+    const xml = el ? el.value.trim() : '';
     if (!xml) { toast('Bitte das XML einfügen.'); return; }
     try { wmsShowLayers(parseWmsCapabilities(xml)); }
     catch (err) { toast('XML nicht lesbar: ' + err.message); }
