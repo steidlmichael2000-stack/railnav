@@ -38,10 +38,14 @@ const MAX_DRAW_GAP_KM = 3;
 const CLICK_TOL_PX = 34;     // Klicktoleranz quer zur Strecke
 const STORE_KEY = 'railnav.v3';
 
-// kumi zuerst: die Hauptinstanz ist aus manchen Netzen nicht erreichbar
+/* Mehrere Instanzen, weil einzelne zeitweise ausfallen: Die Hauptinstanz war
+ * zwischenzeitlich aus dem Testnetz gar nicht erreichbar (HTTP 406), kumi hat
+ * bei der schweren Geometrieabfrage mit 504 abgebrochen. Der Reihe nach
+ * durchprobieren, die erste brauchbare Antwort gewinnt. */
 const OVERPASS = [
+  'https://overpass-api.de/api/interpreter',
   'https://overpass.kumi.systems/api/interpreter',
-  'https://overpass-api.de/api/interpreter'
+  'https://overpass.private.coffee/api/interpreter'
 ];
 
 /* ============================ Helfer ============================ */
