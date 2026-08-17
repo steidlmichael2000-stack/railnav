@@ -16,6 +16,8 @@ am Rechner und lässt sich als App auf den Startbildschirm legen.
   Stein direkt antippen, statt zu interpolieren.
 - **Gemessene Genauigkeitsangabe.** Zu jedem Punkt steht dabei, wie weit er danebenliegen kann —
   nicht geschätzt, sondern an 1474 Steintripeln nachgemessen (siehe unten).
+- **Optional exakt auf dem Gleis.** Stehen die Steine weit auseinander, lässt sich der Punkt auf
+  Knopfdruck entlang des tatsächlichen Gleisverlaufs rechnen statt entlang der Luftlinie.
 - **Karte, Luftbild und Bahn-Layer** umschaltbar, eigener Standort, Link zum Teilen,
   Betriebsstellensuche über Name, DS100 oder UIC.
 - **Offlinefähig** — die App selbst und bereits geladene Kartenkacheln bleiben ohne Netz nutzbar.
@@ -59,6 +61,30 @@ Ein zwischenzeitlich eingebauter Schätzer, der $R$ aus drei benachbarten Steine
 wieder entfernt: Er hat Rauschen gefittet, lag in fast der Hälfte der Fälle zu **niedrig** und
 sagte bei großen Steinabständen absurd hohe Werte voraus. Eine falsche Zahl ist schlimmer als
 gar keine.
+
+### Genauer: dem Gleisverlauf folgen
+
+Stehen die Steine weit auseinander, schneidet die Gerade den Bogen ab. Dann bietet die App den
+Knopf **„Punkt auf das Gleis rechnen"** an (ab 700 m Steinabstand, darunter bringt es nichts).
+Dahinter steckt: Gleisgeometrie über [Overpass](https://overpass-api.de/) holen, aus den
+Wegstücken ein Knotennetz bauen, mit Dijkstra den kürzesten Gleisweg zwischen den beiden Steinen
+suchen und den Punkt anteilig entlang dieses Wegs setzen — statt entlang der Luftlinie.
+
+Am Beispiel Strecke 5321 km 99,0 (Steine bei km 96,42 und 100,0, 3,1 km Luftlinie):
+
+| | |
+| --- | --- |
+| geradlinig interpoliert | 375 m neben dem Gleis |
+| entlang des Gleises | **0 m**, exakt auf der Achse |
+| gefundener Gleisweg | 3549 m gegenüber 3580 m Kilometerdifferenz (99,1 %) |
+| Dauer | rund 16 s |
+
+Das Verhältnis von Gleisweg zu Kilometerdifferenz dient gleich als Prüfung: Passt es nicht auf
+±20–30 %, wurde das falsche Gleis erwischt und die App lehnt das Ergebnis ab, statt es zu zeigen.
+
+Bewusst **kein Automatismus**: Die Abfrage dauert Sekunden, ist ratenbegrenzt, funktioniert nicht
+offline, und bei den üblichen 200 m Steinabstand wäre der Gewinn kleiner als die
+Erfassungsgenauigkeit der Steine selbst.
 
 ### Interpolieren oder einfach den nächsten Stein zeigen?
 

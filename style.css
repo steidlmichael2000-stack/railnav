@@ -278,6 +278,20 @@ body {
 .bb-note { font-size: .76rem; color: var(--warn); line-height: 1.5; margin: 7px 0 0; }
 .bb-note.plain { color: var(--muted); }
 
+.refine {
+  display: block; width: 100%; margin-top: 10px;
+  padding: 10px 13px; border-radius: 11px; text-align: left; cursor: pointer;
+  font: inherit; font-size: .88rem; font-weight: 650;
+  border: 1px solid color-mix(in srgb, var(--ok) 45%, transparent);
+  background: color-mix(in srgb, var(--ok) 13%, transparent);
+  color: var(--ok);
+}
+.refine small {
+  display: block; margin-top: 1px;
+  font-size: .72rem; font-weight: 400; color: var(--muted);
+}
+.refine:active { filter: brightness(1.15); }
+
 .bb-more { margin-top: 7px; }
 .bb-more summary {
   font-size: .74rem; color: var(--muted-2); cursor: pointer;

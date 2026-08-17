@@ -352,6 +352,184 @@ function projectOnLine(sorted, lat, lon) {
   return best;
 }
 
+/* ============================ Feinrechnung entlang des Gleises ============================ */
+
+/* Die geradlinige Interpolation schneidet Bögen ab. Wer den tatsächlichen
+ * Gleisverlauf kennt, kann den Punkt exakt darauf setzen — gemessen an
+ * Strecke 5321 km 99,0 waren das 375 m Unterschied.
+ *
+ * Das kostet allerdings eine Overpass-Abfrage (Sekunden, nicht offline) und
+ * lohnt nur bei weit auseinanderliegenden Steinen: bei 200 m Abstand liegt die
+ * Interpolation ohnehin nur 10 m daneben, und das ist die Erfassungsgenauigkeit
+ * der Steine, gegen die kein Gleisverlauf hilft. Deshalb kein Automatismus,
+ * sondern ein Knopf, der erst ab REFINE_MIN_CHORD auftaucht.
+ */
+const REFINE_MIN_CHORD = 700;
+
+async function railGeometry(a, b) {
+  const pad = 0.012;   // gut 1 km Rand, damit Bögen außerhalb der Sehne mitkommen
+  const bbox = [
+    Math.min(a.lat, b.lat) - pad, Math.min(a.lon, b.lon) - pad,
+    Math.max(a.lat, b.lat) + pad, Math.max(a.lon, b.lon) + pad
+  ].join(',');
+  const q = `[out:json][timeout:60];way(${bbox})[railway~"^(rail|light_rail|narrow_gauge)$"];out geom;`;
+
+  let data = null, lastErr = null;
+  for (const ep of OVERPASS) {
+    try { data = await tryFetch(ep + '?data=' + encodeURIComponent(q), 40000); break; }
+    catch (err) { lastErr = err; }
+  }
+  if (!data) throw new Error('Overpass nicht erreichbar (' + (lastErr && lastErr.message) + ')');
+  return (data.elements || []).filter(w => w.geometry && w.geometry.length > 1);
+}
+
+/* Eine Strecke besteht aus vielen Wegstücken, unsortiert und mit Abzweigen.
+ * Statt sie zu sortieren wird ein Knotennetz gebaut und darin der kürzeste Weg
+ * gesucht — das findet den Verlauf auch über Weichen und Wegegrenzen hinweg.
+ * Zusammenhängende Wege teilen in OSM denselben Knoten, also dieselbe Koordinate. */
+function buildGraph(ways) {
+  const keyOf = p => p.lat.toFixed(7) + ',' + p.lon.toFixed(7);
+  const nodes = new Map();
+
+  const ensure = p => {
+    const k = keyOf(p);
+    if (!nodes.has(k)) nodes.set(k, { lat: p.lat, lon: p.lon, adj: [] });
+    return k;
+  };
+
+  for (const w of ways) {
+    for (let i = 1; i < w.geometry.length; i++) {
+      const k1 = ensure(w.geometry[i - 1]);
+      const k2 = ensure(w.geometry[i]);
+      if (k1 === k2) continue;
+      const n1 = nodes.get(k1), n2 = nodes.get(k2);
+      const d = haversine(n1.lat, n1.lon, n2.lat, n2.lon);
+      n1.adj.push([k2, d]);
+      n2.adj.push([k1, d]);
+    }
+  }
+  return nodes;
+}
+
+function nearestNode(nodes, lat, lon) {
+  let key = null, dist = Infinity;
+  for (const [k, n] of nodes) {
+    const d = haversine(lat, lon, n.lat, n.lon);
+    if (d < dist) { dist = d; key = k; }
+  }
+  return { key, dist };
+}
+
+/** Dijkstra über das Knotennetz. */
+function shortestPath(nodes, startKey, endKey) {
+  const dist = new Map([[startKey, 0]]);
+  const prev = new Map();
+  const done = new Set();
+
+  for (;;) {
+    let cur = null, curD = Infinity;
+    for (const [k, d] of dist) {
+      if (!done.has(k) && d < curD) { curD = d; cur = k; }
+    }
+    if (cur === null) return null;          // nicht verbunden
+    if (cur === endKey) break;
+    done.add(cur);
+    for (const [nk, w] of nodes.get(cur).adj) {
+      if (done.has(nk)) continue;
+      const nd = curD + w;
+      if (nd < (dist.has(nk) ? dist.get(nk) : Infinity)) { dist.set(nk, nd); prev.set(nk, cur); }
+    }
+  }
+
+  const path = [];
+  let k = endKey;
+  while (k !== undefined) {
+    const n = nodes.get(k);
+    path.push([n.lat, n.lon]);
+    if (k === startKey) break;
+    k = prev.get(k);
+  }
+  return { path: path.reverse(), length: dist.get(endKey) };
+}
+
+/** Punkt in gegebener Entfernung entlang eines Streckenzugs. */
+function pointAlong(path, target) {
+  let acc = 0;
+  for (let i = 1; i < path.length; i++) {
+    const d = haversine(path[i - 1][0], path[i - 1][1], path[i][0], path[i][1]);
+    if (acc + d >= target) {
+      const t = d > 0 ? (target - acc) / d : 0;
+      return {
+        lat: path[i - 1][0] + t * (path[i][0] - path[i - 1][0]),
+        lon: path[i - 1][1] + t * (path[i][1] - path[i - 1][1])
+      };
+    }
+    acc += d;
+  }
+  const last = path[path.length - 1];
+  return { lat: last[0], lon: last[1] };
+}
+
+async function refineOnTrack() {
+  const p = view.point;
+  if (!p || p.quality !== 'interpoliert' || view.busy) return;
+
+  const store = lineCache.get(view.ref);
+  const A = store && store.sorted.find(x => Math.abs(x.km - p.between[0]) < 1e-6);
+  const B = store && store.sorted.find(x => Math.abs(x.km - p.between[1]) < 1e-6);
+  if (!A || !B) { toast('Nachbarsteine nicht mehr im Speicher — bitte neu suchen.'); return; }
+
+  setBusy(true);
+  const zuvor = $('#bottom').innerHTML;
+  showStatus('Hole den Gleisverlauf von Overpass — das dauert einige Sekunden …');
+
+  try {
+    const ways = await railGeometry(A, B);
+    if (!ways.length) throw new Error('keine Gleisgeometrie im Ausschnitt');
+
+    const nodes = buildGraph(ways);
+    if (nodes.size > 60000) throw new Error('zu viele Gleise im Ausschnitt');
+
+    const na = nearestNode(nodes, A.lat, A.lon);
+    const nb = nearestNode(nodes, B.lat, B.lon);
+    if (na.dist > 80 || nb.dist > 80) {
+      throw new Error(`die Steine liegen bis ${nfM.format(Math.max(na.dist, nb.dist))} m vom nächsten Gleis entfernt`);
+    }
+
+    const sp = shortestPath(nodes, na.key, nb.key);
+    if (!sp) throw new Error('kein durchgehender Gleisweg zwischen den beiden Steinen');
+
+    const nominal = (B.km - A.km) * 1000;
+    const ratio = sp.length / nominal;
+    if (ratio < 0.8 || ratio > 1.3) {
+      throw new Error(`der gefundene Gleisweg ist ${nfM.format(sp.length)} m lang, die Kilometerdifferenz aber ${nfM.format(nominal)} m`);
+    }
+
+    const t = (view.km - A.km) / (B.km - A.km);
+    const pos = pointAlong(sp.path, t * sp.length);
+    const korrektur = haversine(p.lat, p.lon, pos.lat, pos.lon);
+
+    trackLayer.clearLayers();
+    L.polyline(sp.path, { color: '#22c55e', weight: 4, opacity: 0.9, interactive: false }).addTo(trackLayer);
+
+    view.point = {
+      ...p, lat: pos.lat, lon: pos.lon, quality: 'gleis',
+      korrektur, wegLaenge: sp.length, nominal
+    };
+    drawPoint();
+    renderBottom();
+    map.setView([pos.lat, pos.lon], Math.max(map.getZoom(), 16));
+    toast(`Auf das Gleis gerechnet — ${nfM.format(korrektur)} m verschoben`);
+  } catch (err) {
+    $('#bottom').innerHTML = zuvor;
+    bindBottom();
+    updateBH();
+    toast('Feinrechnung nicht möglich: ' + err.message);
+  } finally {
+    setBusy(false);
+  }
+}
+
 /* ============================ Zustand ============================ */
 
 const view = {
@@ -366,7 +544,7 @@ let recent = [];   // nicht "history" nennen — das ist window.history
 
 /* ============================ Karte ============================ */
 
-let map, baseOsm, baseSat, ormLayer, msLayer, pointLayer, meLayer;
+let map, baseOsm, baseSat, ormLayer, msLayer, trackLayer, pointLayer, meLayer;
 let pointMarker = null;
 
 function initMap() {
@@ -386,6 +564,7 @@ function initMap() {
 
   baseOsm.addTo(map);
   msLayer = L.layerGroup().addTo(map);
+  trackLayer = L.layerGroup().addTo(map);
   pointLayer = L.layerGroup().addTo(map);
   meLayer = L.layerGroup().addTo(map);
 
@@ -686,6 +865,7 @@ function applyPoint(ref, km, result) {
   view.ref = ref;
   view.km = km;
   view.point = result;
+  if (trackLayer) trackLayer.clearLayers();   // Gleis-Overlay gehört zum alten Punkt
 
   $('#ref').value = ref;
   $('#km').value = fmtKm(km);
@@ -699,6 +879,7 @@ function applyPoint(ref, km, result) {
 
 function qualityTag(p) {
   if (p.quality === 'exakt') return { cls: 'ok', text: 'Kilometerstein' };
+  if (p.quality === 'gleis') return { cls: 'ok', text: 'auf dem Gleis' };
   if (p.quality === 'interpoliert') {
     // Schwelle bei 50 m: die beiden dichten Steinabstände bleiben grün,
     // orange wird es erst, wenn die Steine wirklich weit auseinanderstehen.
@@ -718,6 +899,12 @@ function renderBottom() {
   const tag = qualityTag(p);
   let title, sub;
 
+  // Feinrechnung nur anbieten, wo sie etwas bringt
+  const refine = (p.quality === 'interpoliert' && p.chord > REFINE_MIN_CHORD)
+    ? `<button type="button" id="refineBtn" class="refine">Punkt auf das Gleis rechnen` +
+      `<small>folgt dem echten Verlauf statt der Luftlinie · braucht Netz, dauert einige Sekunden</small></button>`
+    : '';
+
   if (p.quality === 'betriebsstelle') {
     const kindDe = { station: 'Bahnhof', halt: 'Haltepunkt', yard: 'Bahnhofsteil', junction: 'Abzweigstelle', service_station: 'Betriebsbahnhof', crossover: 'Überleitstelle' }[p.kind] || 'Betriebsstelle';
     title = p.name;
@@ -735,6 +922,12 @@ function renderBottom() {
     detail = `Direkt die Lage des erfassten Steins. Wie genau der in OpenStreetMap sitzt, ` +
       `lässt sich nicht nachprüfen — aus dem Vergleich benachbarter Steine auf geraden Abschnitten ` +
       `ergibt sich eine Streuung in der Größenordnung von 10 m.`;
+  } else if (p.quality === 'gleis') {
+    detail = `Entlang des tatsächlichen Gleisverlaufs gerechnet statt geradlinig: ` +
+      `${nfM.format(p.wegLaenge)} m Gleisweg zwischen den Steinen bei km ${fmtKm(p.between[0])} und ` +
+      `${fmtKm(p.between[1])}, laut Kilometrierung ${nfM.format(p.nominal)} m. Der Punkt liegt damit ` +
+      `${nfM.format(p.korrektur)} m von der geradlinigen Schätzung entfernt. Bleibt als Unsicherheit die ` +
+      `Erfassungsgenauigkeit der Steine, Größenordnung 10 m.`;
   } else if (p.quality === 'naechster') {
     warn = `<p class="bb-note">Bei km ${fmtKm(view.km)} ist kein Stein erfasst. Angezeigt wird der nächstgelegene bei km ${fmtKm(p.nearKm)} — ${fmtKm(Math.abs(p.delta))} km Unterschied.</p>`;
     if (p.verworfen && p.verworfen.grund === 'luecke') {
@@ -773,6 +966,7 @@ function renderBottom() {
     </div>
     <p class="bb-coord">${fmtCoord(p.lat, p.lon)}</p>
     ${warn}
+    ${refine}
     <details class="bb-more">
       <summary>Herkunft &amp; Genauigkeit</summary>
       <p class="bb-note plain">${esc(sub)}${detail ? ' · ' + esc(detail) : ''}</p>
@@ -782,12 +976,25 @@ function renderBottom() {
       <a href="${gmapsRoute(p.lat, p.lon)}" target="_blank" rel="noopener">Route</a>
       <button type="button" id="copyBtn">Kopieren</button>
     </div>`;
-  b.querySelector('.bb-more').addEventListener('toggle', updateBH);
 
-  $('#copyBtn').addEventListener('click', async () => {
+  bindBottom();
+  updateBH();
+}
+
+/** Ereignisse der unteren Leiste — separat, weil die Leiste neu gezeichnet wird. */
+function bindBottom() {
+  const copy = $('#copyBtn');
+  if (copy) copy.addEventListener('click', async () => {
+    const p = view.point;
+    if (!p) return;
     toast(await copyText(fmtCoord(p.lat, p.lon)) ? 'Koordinaten kopiert' : 'Kopieren nicht möglich');
   });
-  updateBH();
+
+  const refine = $('#refineBtn');
+  if (refine) refine.addEventListener('click', refineOnTrack);
+
+  const more = $('.bb-more');
+  if (more) more.addEventListener('toggle', updateBH);
 }
 
 function showStatus(msg) {
