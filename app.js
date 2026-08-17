@@ -203,8 +203,20 @@ async function resolvePoint(ref, km) {
     return { lat: exact.lat, lon: exact.lon, quality: 'exakt', operator: exact.operator, lineRef: exact.ref };
   }
 
+  // Ein Paar, das die Plausibilitätsprüfung nicht besteht, wird unten als Grund
+  // ausgewiesen — sonst steht da nur „kein Stein erfasst" und niemand versteht,
+  // warum trotz zweier Nachbarsteine nicht interpoliert wurde.
+  let verworfen = null;
+
   if (lower && upper) {
     const span = upper.km - lower.km;
+    if (!segmentOk(lower, upper) && span > 0) {
+      verworfen = {
+        von: lower.km, bis: upper.km,
+        luftlinie: haversine(lower.lat, lower.lon, upper.lat, upper.lon),
+        moeglich: span * 1000
+      };
+    }
     if (segmentOk(lower, upper)) {
       const t = (km - lower.km) / span;
       const geo = haversine(lower.lat, lower.lon, upper.lat, upper.lon);
@@ -225,7 +237,7 @@ async function resolvePoint(ref, km) {
   const near = e.sorted.reduce((a, b) => Math.abs(b.km - km) < Math.abs(a.km - km) ? b : a);
   return {
     lat: near.lat, lon: near.lon, quality: 'naechster',
-    delta: near.km - km, nearKm: near.km,
+    delta: near.km - km, nearKm: near.km, verworfen,
     operator: near.operator, lineRef: near.ref
   };
 }
@@ -655,9 +667,9 @@ function applyPoint(ref, km, result) {
 function qualityTag(p) {
   if (p.quality === 'exakt') return { cls: 'ok', text: 'Kilometerstein' };
   if (p.quality === 'interpoliert') {
-    return p.err.worst > 25
-      ? { cls: 'warn', text: `interpoliert ±${nfM.format(p.err.worst)} m` }
-      : { cls: 'ok', text: `interpoliert ±${nfM.format(Math.max(p.err.worst, 1))} m` };
+    // Schwelle bei 50 m: die beiden dichten Steinabstände bleiben grün,
+    // orange wird es erst, wenn die Steine wirklich weit auseinanderstehen.
+    return { cls: p.err.worst > 50 ? 'warn' : 'ok', text: `interpoliert ±${nfM.format(p.err.worst)} m` };
   }
   if (p.quality === 'karte') return { cls: 'warn', text: 'von der Karte' };
   if (p.quality === 'betriebsstelle') return { cls: 'ok', text: 'Betriebsstelle' };
@@ -692,6 +704,13 @@ function renderBottom() {
       `ergibt sich eine Streuung in der Größenordnung von 10 m.`;
   } else if (p.quality === 'naechster') {
     warn = `<p class="bb-note">Bei km ${fmtKm(view.km)} ist kein Stein erfasst. Angezeigt wird der nächstgelegene bei km ${fmtKm(p.nearKm)} — ${fmtKm(Math.abs(p.delta))} km Unterschied.</p>`;
+    if (p.verworfen) {
+      const v = p.verworfen;
+      warn += `<p class="bb-note">Die Steine bei km ${fmtKm(v.von)} und ${fmtKm(v.bis)} wären Nachbarn, liegen aber ` +
+        `${nfM.format(v.luftlinie)} m auseinander — bei ${nfM.format(v.moeglich)} m Kilometerdifferenz ist das unmöglich. ` +
+        `Dazwischen zu interpolieren würde einen Punkt irgendwo im Nichts ergeben, deshalb unterbleibt es.</p>`;
+      detail = `Solche Widersprüche entstehen, wenn dieselbe Streckennummer in OpenStreetMap an mehreren Stellen vergeben ist oder Steine falsch erfasst wurden.`;
+    }
   } else if (p.quality === 'karte') {
     detail = `Aus dem Kartentipp abgeleitet, zwischen den Steinen bei km ${fmtKm(p.between[0])} und ${fmtKm(p.between[1])}` +
       (p.offset > 15 ? `, ${nfM.format(p.offset)} m querab der Linie` : '') + `.`;
