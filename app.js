@@ -13,7 +13,28 @@
 
 const API = 'https://api.openrailwaymap.org/v2';
 const LIMIT = 200;           // Maximum der API je Abfrage
-const MAX_GAP_KM = 3;        // größere Lücken zwischen zwei Steinen nicht überbrücken
+/* Bis zu welcher Lücke zwischen zwei Steinen wird interpoliert?
+ *
+ * Gemessen über 1869 Steintripel (ein Stein übersprungen, über die Lücke
+ * interpoliert, mit seiner echten Lage verglichen) schlägt die Interpolation
+ * die Anzeige des nächstgelegenen Steins über den ganzen Bereich:
+ *
+ *   Steinabstand   interpoliert   nächster Stein   interpoliert besser
+ *   250– 700 m       22 m            176 m              99 %
+ *   700–1200 m       33 m            206 m              98 %
+ *  1200–2000 m       36 m            401 m              98 %
+ *  2000–4000 m       49 m            836 m             100 %
+ *  4000–7000 m      265 m           1617 m             100 %
+ *
+ * Eine engere Grenze verschenkt also nur Genauigkeit. Jenseits von 8 km ist
+ * die Datenlage zu dünn, um es zu belegen — dort bleibt es beim nächsten Stein.
+ */
+const MAX_GAP_KM = 8;
+
+/* Für die gezeichnete Linie und das Antippen der Karte gilt eine engere Grenze:
+ * Eine Gerade über viele Kilometer unbekannten Verlaufs sieht auf der Karte
+ * falsch aus und würde Klicks weit neben dem echten Gleis an sich ziehen. */
+const MAX_DRAW_GAP_KM = 3;
 const CLICK_TOL_PX = 34;     // Klicktoleranz quer zur Strecke
 const STORE_KEY = 'railnav.v3';
 
@@ -134,10 +155,19 @@ function bracketOf(sorted, km) {
  *  Nummernwechseln liegen gleiche Kilometerwerte an ganz anderen Orten.
  *  Ohne diese Prüfung würde quer durchs Land interpoliert.
  */
-function segmentOk(a, b) {
+function segmentOk(a, b, maxGap = MAX_GAP_KM) {
   const dkm = b.km - a.km;
-  if (dkm <= 0 || dkm > MAX_GAP_KM) return false;
+  if (dkm <= 0 || dkm > maxGap) return false;
   return haversine(a.lat, a.lon, b.lat, b.lon) <= dkm * 1000 * 1.25 + 50;
+}
+
+/** Warum ein Paar nicht taugt — für die Anzeige, damit dort kein falscher Grund steht. */
+function rejectReason(a, b) {
+  const dkm = b.km - a.km;
+  if (dkm <= 0) return null;
+  if (dkm > MAX_GAP_KM) return 'luecke';
+  if (haversine(a.lat, a.lon, b.lat, b.lon) > dkm * 1000 * 1.25 + 50) return 'geometrie';
+  return null;
 }
 
 function hasBracket(sorted, km) {
@@ -210,11 +240,12 @@ async function resolvePoint(ref, km) {
 
   if (lower && upper) {
     const span = upper.km - lower.km;
-    if (!segmentOk(lower, upper) && span > 0) {
+    const grund = rejectReason(lower, upper);
+    if (grund) {
       verworfen = {
-        von: lower.km, bis: upper.km,
+        grund, von: lower.km, bis: upper.km,
         luftlinie: haversine(lower.lat, lower.lon, upper.lat, upper.lon),
-        moeglich: span * 1000
+        entlang: span * 1000
       };
     }
     if (segmentOk(lower, upper)) {
@@ -281,9 +312,11 @@ async function searchFacility(query) {
  */
 const ERR_TABLE = [
   { upTo: 250, typical: 10, worst: 29 },
-  { upTo: 700, typical: 25, worst: 46 },
-  { upTo: 1200, typical: 33, worst: 85 },
-  { upTo: Infinity, typical: 37, worst: 126 }
+  { upTo: 700, typical: 22, worst: 46 },
+  { upTo: 1200, typical: 33, worst: 81 },
+  { upTo: 2000, typical: 36, worst: 95 },
+  { upTo: 4000, typical: 49, worst: 263 },
+  { upTo: Infinity, typical: 265, worst: 707 }
 ];
 
 function interpolationError(chordM) {
@@ -301,7 +334,7 @@ function projectOnLine(sorted, lat, lon) {
 
   for (let i = 1; i < sorted.length; i++) {
     const a = sorted[i - 1], b = sorted[i];
-    if (!segmentOk(a, b)) continue;               // Lücken und Fehlpaare überspringen
+    if (!segmentOk(a, b, MAX_DRAW_GAP_KM)) continue;   // Lücken und Fehlpaare überspringen
     const dkm = b.km - a.km;
 
     const ax = a.lon * kx, ay = a.lat * ky;
@@ -413,7 +446,7 @@ function drawMilestones() {
   const path = [];
   for (let i = 1; i < e.sorted.length; i++) {
     const a = e.sorted[i - 1], b = e.sorted[i];
-    if (segmentOk(a, b)) path.push([[a.lat, a.lon], [b.lat, b.lon]]);
+    if (segmentOk(a, b, MAX_DRAW_GAP_KM)) path.push([[a.lat, a.lon], [b.lat, b.lon]]);
   }
   if (path.length) {
     L.polyline(path, { color: '#4b93e6', weight: 3, opacity: 0.45, interactive: false }).addTo(msLayer);
@@ -704,11 +737,15 @@ function renderBottom() {
       `ergibt sich eine Streuung in der Größenordnung von 10 m.`;
   } else if (p.quality === 'naechster') {
     warn = `<p class="bb-note">Bei km ${fmtKm(view.km)} ist kein Stein erfasst. Angezeigt wird der nächstgelegene bei km ${fmtKm(p.nearKm)} — ${fmtKm(Math.abs(p.delta))} km Unterschied.</p>`;
-    if (p.verworfen) {
+    if (p.verworfen && p.verworfen.grund === 'luecke') {
+      warn += `<p class="bb-note">Die nächsten Steine stehen bei km ${fmtKm(p.verworfen.von)} und ${fmtKm(p.verworfen.bis)} — ` +
+        `${fmtKm(p.verworfen.entlang / 1000)} km Lücke. Über so weite Strecken wird nicht mehr interpoliert, ` +
+        `weil der Verlauf dazwischen unbekannt ist.</p>`;
+    } else if (p.verworfen && p.verworfen.grund === 'geometrie') {
       const v = p.verworfen;
       warn += `<p class="bb-note">Die Steine bei km ${fmtKm(v.von)} und ${fmtKm(v.bis)} wären Nachbarn, liegen aber ` +
-        `${nfM.format(v.luftlinie)} m auseinander — bei ${nfM.format(v.moeglich)} m Kilometerdifferenz ist das unmöglich. ` +
-        `Dazwischen zu interpolieren würde einen Punkt irgendwo im Nichts ergeben, deshalb unterbleibt es.</p>`;
+        `${nfM.format(v.luftlinie)} m Luftlinie auseinander — bei nur ${nfM.format(v.entlang)} m entlang der Strecke ` +
+        `ist das geometrisch unmöglich. Die beiden gehören nicht zusammen.</p>`;
       detail = `Solche Widersprüche entstehen, wenn dieselbe Streckennummer in OpenStreetMap an mehreren Stellen vergeben ist oder Steine falsch erfasst wurden.`;
     }
   } else if (p.quality === 'karte') {
