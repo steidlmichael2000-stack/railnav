@@ -105,6 +105,27 @@ body {
 .north svg { width: 20px; height: 20px; fill: var(--bad); grid-area: 1/1; margin-top: -6px; }
 .north span { grid-area: 1/1; font-size: .58rem; font-weight: 700; margin-top: 12px; color: var(--muted); }
 
+/* Standortknopf — rechts, über den Zoomknöpfen */
+.maploc {
+  position: fixed;
+  /* bündig über den Zoomknöpfen: deren Steuerung ist 72 px hoch plus Rand */
+  right: var(--gap);
+  bottom: calc(var(--bh) + 108px + env(safe-area-inset-bottom));
+  z-index: 450;
+  width: 42px; height: 42px;
+  display: grid; place-items: center;
+  border-radius: 50%; border: 1px solid var(--line);
+  background: var(--glass); color: var(--muted);
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+  cursor: pointer;
+}
+.maploc svg { width: 21px; height: 21px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; }
+.maploc svg circle:first-child { fill: currentColor; stroke: none; }
+.maploc.is-on { color: #2f81f7; border-color: color-mix(in srgb, #2f81f7 45%, transparent); }
+.maploc.busy { opacity: .6; }
+.maploc.busy svg .ring { stroke-dasharray: 6 5; }
+
 /* ---------- schwebende Bedienung ---------- */
 
 .ui {

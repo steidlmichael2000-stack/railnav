@@ -630,6 +630,13 @@ function applyBaseOpacity() {
   const o = (prefs.baseOpacity == null ? 100 : prefs.baseOpacity) / 100;
   if (baseOsm) baseOsm.setOpacity(o);
   if (baseSat) baseSat.setOpacity(o);
+
+  // Sobald der Hintergrund durchscheinend wird, muss darunter Weiß liegen:
+  // Bahn- und IVL-Pläne sind schwarze Strichzeichnungen und wären im
+  // Dunkelmodus auf dunklem Grund praktisch unsichtbar.
+  const flaeche = $('#map');
+  if (flaeche) flaeche.style.background = o < 1 ? '#ffffff' : '';
+
   const val = $('#baseOpacityVal');
   if (val) val.textContent = Math.round(o * 100) + ' %';
 }
@@ -1294,11 +1301,14 @@ async function runFacility() {
 /* ============================ Standort ============================ */
 
 function locate() {
+  const btn = $('#mapLocBtn');
   if (!navigator.geolocation) { toast('Standortbestimmung wird nicht unterstützt.'); return; }
   if (!window.isSecureContext) { toast('Standort geht nur über HTTPS.'); return; }
   closeSheet();
+  if (btn) btn.classList.add('busy');
   toast('Standort wird ermittelt …');
   navigator.geolocation.getCurrentPosition(pos => {
+    if (btn) { btn.classList.remove('busy'); btn.classList.add('is-on'); }
     const { latitude: lat, longitude: lon, accuracy } = pos.coords;
     meLayer.clearLayers();
     L.marker([lat, lon], {
@@ -1308,6 +1318,7 @@ function locate() {
     map.setView([lat, lon], 16);
     toast(`Standort auf ±${nfM.format(accuracy || 0)} m genau — auf die Strecke tippen für den Kilometer.`);
   }, err => {
+    if (btn) btn.classList.remove('busy', 'is-on');
     toast('Standort nicht verfügbar: ' + (err.message || 'unbekannt'));
   }, { enableHighAccuracy: true, timeout: 15000, maximumAge: 10000 });
 }
@@ -1484,6 +1495,7 @@ function bind() {
   });
 
   on('#locBtn', 'click', locate);
+  on('#mapLocBtn', 'click', locate);
   on('#shareBtn', 'click', share);
 
   // WMS: Adresse und Layer merken, Zugangsdaten bleiben beim Browser
