@@ -251,26 +251,31 @@ async function searchFacility(query) {
 
 /* Wie weit liegt die geradlinige Interpolation zwischen zwei Steinen daneben?
  *
- * Im Bogen weicht die Sehne vom Gleis um rund L²/(8R) ab (L = Steinabstand,
- * R = Bogenhalbmesser). R aus den Nachbarsteinen zu schätzen erwies sich als
- * unbrauchbar — die Streuung der erfassten Steine schlägt bei kurzen Abständen
- * voll durch, der Schätzer lag in fast der Hälfte der Fälle zu niedrig.
+ * Gemessen statt gerechnet: auf vierzehn Strecken wurde über 1474 Steintripel
+ * jeweils der mittlere Stein übersprungen, über die Lücke interpoliert und mit
+ * seiner tatsächlichen Lage verglichen.
  *
- * Stattdessen empirisch kalibriert: über 1146 Steinpaare auf zwölf Strecken
- * (1700, 1720, 2200, 2550, 2650, 3600, 4000, 4201, 5100, 5200, 6100, 6340)
- * wurde jeweils ein Stein übersprungen, über die Lücke interpoliert und die
- * Abweichung zu seiner tatsächlichen Lage gemessen. Ergebnis:
+ * Das überraschende Ergebnis: auf nahezu geraden Abschnitten (Bogenhalbmesser
+ * über 4000 m), wo die Interpolation exakt sein müsste, wurden trotzdem 10–29 m
+ * Abweichung gemessen — praktisch dasselbe wie in engen Bögen. Der Bogen ist
+ * also nicht der begrenzende Faktor, sondern die Erfassungsgenauigkeit der
+ * Steine in OpenStreetMap. Erst ab etwa 700 m Steinabstand schlägt die Krümmung
+ * durch (Median 40 m im Bogen gegenüber 22 m auf der Geraden).
  *
- *   Median          L²/9700   (entspricht R ≈ 1200 m)
- *   90. Perzentil   L²/2900   (entspricht R ≈  360 m)
- *
- * Das sind genau die Bogenhalbmesser, die auf diesen Strecken zu erwarten sind.
+ * Eine Formel über den Bogenhalbmesser hat deshalb nichts getaugt — sie hat
+ * Rauschen gefittet. Hier stehen stattdessen die gemessenen Verteilungen.
+ * Sie enthalten die Streuung der Steinerfassung mit, sind also eine Obergrenze
+ * für den Fehler des Verfahrens selbst.
  */
-const ERR_TYPICAL = 9700;
-const ERR_WORST = 2900;
+const ERR_TABLE = [
+  { upTo: 250, typical: 10, worst: 29 },
+  { upTo: 700, typical: 25, worst: 46 },
+  { upTo: 1200, typical: 33, worst: 85 },
+  { upTo: Infinity, typical: 37, worst: 126 }
+];
 
 function interpolationError(chordM) {
-  return { typical: chordM * chordM / ERR_TYPICAL, worst: chordM * chordM / ERR_WORST };
+  return ERR_TABLE.find(r => chordM < r.upTo);
 }
 
 /** Nächster Punkt auf dem Streckenzug der Kilometersteine — liefert auch den Kilometer dort. */
@@ -681,7 +686,11 @@ function renderBottom() {
   // Leiste den halben Bildschirm
   let warn = '', detail = '';
 
-  if (p.quality === 'naechster') {
+  if (p.quality === 'exakt') {
+    detail = `Direkt die Lage des erfassten Steins. Wie genau der in OpenStreetMap sitzt, ` +
+      `lässt sich nicht nachprüfen — aus dem Vergleich benachbarter Steine auf geraden Abschnitten ` +
+      `ergibt sich eine Streuung in der Größenordnung von 10 m.`;
+  } else if (p.quality === 'naechster') {
     warn = `<p class="bb-note">Bei km ${fmtKm(view.km)} ist kein Stein erfasst. Angezeigt wird der nächstgelegene bei km ${fmtKm(p.nearKm)} — ${fmtKm(Math.abs(p.delta))} km Unterschied.</p>`;
   } else if (p.quality === 'karte') {
     detail = `Aus dem Kartentipp abgeleitet, zwischen den Steinen bei km ${fmtKm(p.between[0])} und ${fmtKm(p.between[1])}` +
@@ -689,9 +698,11 @@ function renderBottom() {
   } else if (p.quality === 'interpoliert') {
     // Der Steinabstand ist der eigentliche Genauigkeitsfaktor, nicht die Rechnung selbst
     detail = `Geradlinig gerechnet zwischen den Steinen bei km ${fmtKm(p.between[0])} und ${fmtKm(p.between[1])}, ` +
-      `${nfM.format(p.chord)} m auseinander. Typisch ${nfM.format(p.err.typical)} m daneben, im Bogen bis ${nfM.format(p.err.worst)} m.`;
+      `${nfM.format(p.chord)} m auseinander. Im Vergleich mit tatsächlich erfassten Zwischensteinen lag das ` +
+      `typisch ${nfM.format(p.err.typical)} m daneben, im ungünstigen Zehntel ${nfM.format(p.err.worst)} m — ` +
+      `darin steckt auch die Streuung der Steinerfassung selbst.`;
     if (p.err.worst > 60) {
-      warn = `<p class="bb-note">Steine ${nfM.format(p.chord)} m auseinander — macht die Strecke hier einen Bogen, liegt der Punkt bis ${nfM.format(p.err.worst)} m neben dem Gleis.</p>`;
+      warn = `<p class="bb-note">Die Steine stehen ${nfM.format(p.chord)} m auseinander. In dieser Größenordnung schlägt die Streckenkrümmung durch — bis zu ${nfM.format(p.err.worst)} m Abweichung.</p>`;
     }
     if (p.spanRatio < 0.75) {
       warn += `<p class="bb-note">Luftlinie und Kilometerdifferenz passen nicht zusammen (${Math.round(p.spanRatio * 100)} %) — starker Bogen oder Kilometersprung.</p>`;

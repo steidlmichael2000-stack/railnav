@@ -14,8 +14,8 @@ am Rechner und lässt sich als App auf den Startbildschirm legen.
 - **Kilometersteine sind sichtbar.** Alle erfassten Steine der Strecke stehen beschriftet auf der
   Karte, verbunden zu einer Linie. Man sieht also, worauf sich die Angabe stützt — und kann einen
   Stein direkt antippen, statt zu interpolieren.
-- **Ehrliche Genauigkeitsangabe.** Zu jedem interpolierten Punkt steht dabei, wie weit er
-  danebenliegen kann (siehe unten).
+- **Gemessene Genauigkeitsangabe.** Zu jedem Punkt steht dabei, wie weit er danebenliegen kann —
+  nicht geschätzt, sondern an 1474 Steintripeln nachgemessen (siehe unten).
 - **Karte, Luftbild und Bahn-Layer** umschaltbar, eigener Standort, Link zum Teilen,
   Betriebsstellensuche über Name, DS100 oder UIC.
 - **Offlinefähig** — die App selbst und bereits geladene Kartenkacheln bleiben ohne Netz nutzbar.
@@ -32,34 +32,51 @@ gesuchten Kilometer ein Stein vor, ist die Position so gut wie dessen Erfassung.
 zwischen den beiden Nachbarsteinen **geradlinig** interpoliert — und genau da entsteht der Fehler:
 im Bogen liegt die Sehne innerhalb des Gleisbogens.
 
-Die Abweichung folgt $s \approx L^2/(8R)$ mit $L$ = Steinabstand und $R$ = Bogenhalbmesser. Statt
-$R$ zu raten, wurde der Fehler gemessen: auf zwölf Strecken (1700, 1720, 2200, 2550, 2650, 3600,
-4000, 4201, 5100, 5200, 6100, 6340) wurde über **1146 Steinpaare** jeweils ein Stein übersprungen,
-über die Lücke interpoliert und mit seiner tatsächlichen Lage verglichen.
+Theoretisch beträgt die Abweichung $L^2/(8R)$ mit $L$ = Steinabstand und $R$ = Bogenhalbmesser.
+Statt das zu glauben, wurde es gemessen: auf vierzehn Strecken wurde über **1474 Steintripel**
+jeweils der mittlere Stein übersprungen, über die Lücke interpoliert und mit seiner tatsächlichen
+Lage verglichen — getrennt nach nahezu geraden Abschnitten und engen Bögen.
 
-| | Abweichung | entspricht R |
+| Steinabstand | gerade ($R$ > 4000 m) | Bogen ($R$ < 800 m) |
 | --- | --- | --- |
-| Median | $L^2/9700$ | ≈ 1200 m |
-| 90. Perzentil | $L^2/2900$ | ≈ 360 m |
+| 150–250 m | 10 m / 27 m | 10 m / 24 m |
+| 250–400 m | 29 m / 47 m | 27 m / 50 m |
+| 400–700 m | 16 m / 43 m | 32 m / 64 m |
+| über 700 m | 22 m / 77 m | 40 m / 149 m |
 
-In der Praxis:
+*Median / 90. Perzentil.*
 
-| Steinabstand | typisch | ungünstige 10 % |
-| --- | --- | --- |
-| 100 m | 1 m | 3 m |
-| 200 m | 4 m | 14 m |
-| 500 m | 26 m | 86 m |
-| 1000 m | 103 m | 345 m |
+**Der Bogen ist nicht der begrenzende Faktor.** Auf geraden Abschnitten müsste die Interpolation
+exakt sein — gemessen werden trotzdem 10–29 m. Was den Fehler dominiert, ist also nicht die
+Rechnung, sondern **wie genau die Steine überhaupt in OpenStreetMap sitzen**. Erst ab etwa 700 m
+Steinabstand schlägt die Krümmung sichtbar durch (40 m statt 22 m im Median).
 
-**Der Steinabstand entscheidet, nicht die Rechnung.** Wo alle 100–200 m eine Tafel erfasst ist,
-liegt man im einstelligen Meterbereich. Wo nur alle 500 m oder 1 km ein Stein steht, kann es im
-Bogen dreistellig werden. Die App schreibt den Steinabstand und beide Werte zu jedem Punkt dazu
-und warnt, sobald es kritisch wird.
+Die Zahlen sind eine Obergrenze für den Fehler des Verfahrens: Sie enthalten die Streuung des
+Vergleichssteins mit. Umgekehrt heißt das, dass auch ein *exakt* getroffener Kilometerstein nur
+auf etwa 10 m genau ist — das ist die Erfassungsgenauigkeit, keine Eigenschaft der App.
 
-Ein früher eingebauter Schätzer, der den Bogenhalbmesser aus drei benachbarten Steinen berechnet,
-wurde wieder entfernt: Er lag in fast der Hälfte der Fälle zu **niedrig**, weil die Streuung der
-erfassten Steine bei kurzen Abständen voll durchschlägt. Eine zu optimistische Zahl ist schlimmer
-als gar keine.
+Ein zwischenzeitlich eingebauter Schätzer, der $R$ aus drei benachbarten Steinen berechnet, wurde
+wieder entfernt: Er hat Rauschen gefittet, lag in fast der Hälfte der Fälle zu **niedrig** und
+sagte bei großen Steinabständen absurd hohe Werte voraus. Eine falsche Zahl ist schlimmer als
+gar keine.
+
+### Interpolieren oder einfach den nächsten Stein zeigen?
+
+Dieselben Daten, andere Frage — für jeden Testpunkt wurde verglichen, wie weit die Interpolation
+danebenlag und wie weit der jeweils nächstgelegene Stein entfernt war:
+
+| Steinabstand | interpoliert | nächster Stein | interpoliert besser in |
+| --- | --- | --- | --- |
+| unter 200 m | 13 m | 22 m | 52 % der Fälle |
+| 200–400 m | 26 m | 154 m | 96 % |
+| 400–800 m | 19 m | 196 m | 98 % |
+| 800–1500 m | 36 m | 233 m | 98 % |
+| über 1500 m | 39 m | 581 m | 98 % |
+
+*Median über 1128 Fälle; insgesamt schneidet die Interpolation in 95 % besser ab (23 m gegenüber
+176 m).* Interpolieren ist also praktisch immer die bessere Wahl — nur wo ohnehin alle 100 m ein
+Stein steht, ist es fast egal. Deshalb interpoliert Railnav grundsätzlich und fällt nur dann auf
+den nächstgelegenen Stein zurück, wenn es kein brauchbares Steinpaar gibt.
 
 ### Zwei weitere Fallstricke, die die App abfängt
 
