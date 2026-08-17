@@ -20,6 +20,7 @@ am Rechner und lässt sich als App auf den Startbildschirm legen.
   Knopfdruck entlang des tatsächlichen Gleisverlaufs rechnen statt entlang der Luftlinie.
 - **Karte, Luftbild und Bahn-Layer** umschaltbar, eigener Standort, Link zum Teilen,
   Betriebsstellensuche über Name, DS100 oder UIC.
+- **Eigener WMS-Layer** als Overlay, auch für zugangsgeschützte Dienste (siehe unten).
 - **Offlinefähig** — die App selbst und bereits geladene Kartenkacheln bleiben ohne Netz nutzbar.
 
 Eingabe: `12,5` oder `12.5`, auch Hektometer-Schreibweise `14+250` (= km 14,250).
@@ -114,6 +115,29 @@ den nächstgelegenen Stein zurück, wenn es kein brauchbares Steinpaar gibt.
    nur 165 m auseinanderliegen, geografisch aber 28 km. Ohne Prüfung würde quer durchs Land
    interpoliert. Railnav verwirft Paare, deren Luftlinie länger ist als die Kilometerdifferenz
    zulässt.
+
+## Eigener WMS-Layer
+
+Im Menü lässt sich ein beliebiger WMS als Overlay einblenden — Adresse, Layer-Name und Deckkraft
+werden lokal gespeichert. Getestet mit
+[TopPlusOpen](https://gdz.bkg.bund.de/index.php/default/wms-topplusopen-wms-topplus-open.html)
+des BKG (`https://sgx.geodatenzentrum.de/wms_topplus_open`, Layer `web`).
+
+**Geschützte Dienste** funktionieren, brauchen aber einen Umweg. Die App kann die Zugangsdaten
+nicht selbst mitschicken: Dafür müssten die Kacheln per `fetch` mit `Authorization`-Header geholt
+werden, und das verlangt CORS-Freigaben, die solche Dienste praktisch nie senden — der Browser
+bricht bereits beim Preflight ab. Als Bild geladen entfällt die CORS-Prüfung, und der Browser
+hängt von sich aus die Zugangsdaten an, die er für die Domain gespeichert hat.
+
+Deshalb der Knopf **Anmelden**: Er öffnet die GetCapabilities-Adresse in einem neuen Tab, der
+Browser fragt Benutzer und Kennwort ab und merkt sie sich. Danach lädt der Layer. Nebenbei sieht
+man dort die verfügbaren Layer-Namen und Koordinatensysteme.
+
+Die Zugangsdaten liegen damit im Passwortspeicher des Browsers — verschlüsselt und mit dem
+Betriebssystem verzahnt. **Die App kennt sie nicht und speichert sie nicht**, weder im Code noch
+im lokalen Speicher.
+
+Voraussetzung ist, dass der Dienst `EPSG:3857` anbietet; andernfalls bräuchte es Proj4Leaflet.
 
 ## Grenzen
 

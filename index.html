@@ -68,6 +68,25 @@
     </section>
 
     <section class="sheet-sec">
+      <h2>Eigener WMS-Layer</h2>
+      <div class="stack">
+        <input id="wmsUrl" type="url" placeholder="https://server/dienst" autocomplete="off" spellcheck="false" inputmode="url">
+        <input id="wmsLayers" type="text" placeholder="Layer-Name, mehrere mit Komma" autocomplete="off" spellcheck="false">
+      </div>
+      <div class="row">
+        <button id="wmsLogin" class="btn" type="button">Anmelden</button>
+        <button id="wmsToggle" class="btn" type="button">Anzeigen</button>
+      </div>
+      <label class="slider-row" for="wmsOpacity">Deckkraft
+        <input id="wmsOpacity" type="range" min="20" max="100" step="5" value="75">
+      </label>
+      <p class="fine">Für geschützte Dienste: einmal auf <strong>Anmelden</strong> tippen, im
+      Browserdialog Benutzer und Kennwort eingeben und speichern lassen. Der Browser hängt die
+      Daten danach selbst an die Kartenanfragen — die App kennt und speichert sie nicht.
+      Adresse und Layer-Name bleiben lokal auf diesem Gerät.</p>
+    </section>
+
+    <section class="sheet-sec">
       <h2>Ansicht</h2>
       <div class="seg" role="group" aria-label="Helligkeit">
         <button class="seg-btn" type="button" data-theme="auto">Automatisch</button>

@@ -212,6 +212,20 @@ body {
   color: var(--muted-2); margin: 0 0 9px;
 }
 
+.stack { display: flex; flex-direction: column; gap: 8px; margin-bottom: 8px; }
+.stack input {
+  width: 100%; padding: 11px 13px; font: inherit; font-size: .92rem;
+  border: 1px solid var(--line); border-radius: 11px;
+  background: var(--panel-2); color: var(--text); outline: none;
+}
+.stack input:focus { border-color: var(--accent); }
+
+.slider-row {
+  display: flex; align-items: center; gap: 12px; margin-top: 10px;
+  font-size: .8rem; color: var(--muted);
+}
+.slider-row input[type="range"] { flex: 1; accent-color: var(--accent); }
+
 .row { display: flex; gap: 8px; }
 .row input {
   flex: 1; min-width: 0;

@@ -543,7 +543,10 @@ const view = {
   busy: false
 };
 
-let prefs = { theme: 'auto', base: 'osm', orm: true };
+let prefs = {
+  theme: 'auto', base: 'osm', orm: true,
+  wms: { url: '', layers: '', opacity: 75, on: false }   // nur Adresse und Layer, nie Zugangsdaten
+};
 let recent = [];   // nicht "history" nennen — das ist window.history
 
 /* ============================ Karte ============================ */
@@ -577,6 +580,7 @@ function initMap() {
 
   if (prefs.orm !== false) ormLayer.addTo(map);
   if (prefs.base === 'sat') setBase('sat');
+  if (prefs.wms && prefs.wms.on) wmsApply(true);
 
   map.on('click', onMapClick);
   map.on('zoomend', drawMilestones);
@@ -599,6 +603,65 @@ function toggleOrm() {
   else { ormLayer.addTo(map); ormLayer.bringToFront(); prefs.orm = true; }
   saveStore();
   syncButtons();
+}
+
+/* -------- Eigener WMS-Layer -------- */
+
+/* Geschützte Dienste liefern ihre Kacheln nur mit Anmeldung. Ein Eingabefeld in
+ * der App hilft dabei nicht: Die Kacheln müssten dann per fetch mit
+ * Authorization-Header geholt werden, und das verlangt CORS-Freigaben, die
+ * solche Dienste praktisch nie senden — der Browser bricht schon beim Preflight
+ * ab. Als Bild (<img>) geladen entfällt die CORS-Prüfung, und der Browser hängt
+ * von sich aus die Zugangsdaten an, die er für die Domain gespeichert hat.
+ * Deshalb: einmal über den Anmelden-Knopf im Browser anmelden, den Rest erledigt
+ * dessen Passwortspeicher. Die App kennt die Zugangsdaten nie. */
+
+let wmsLayer = null;
+let wmsFehler = 0;
+
+function wmsBuild() {
+  const url = (prefs.wms.url || '').trim();
+  const layers = (prefs.wms.layers || '').trim();
+  if (!url || !layers) return null;
+
+  const layer = L.tileLayer.wms(url, {
+    layers, format: 'image/png', transparent: true, version: '1.3.0',
+    opacity: (prefs.wms.opacity || 75) / 100,
+    crossOrigin: false        // kein CORS anfordern, sonst scheitert der Abruf
+  });
+
+  wmsFehler = 0;
+  layer.on('tileerror', () => {
+    wmsFehler++;
+    // Erst nach mehreren Fehlschlägen melden, einzelne Aussetzer sind normal
+    if (wmsFehler === 4) {
+      toast('WMS-Kacheln kommen nicht — Adresse, Layer-Name oder Anmeldung prüfen.');
+    }
+  });
+  return layer;
+}
+
+function wmsApply(sichtbar) {
+  if (wmsLayer) { map.removeLayer(wmsLayer); wmsLayer = null; }
+  prefs.wms.on = !!sichtbar;
+  if (sichtbar) {
+    wmsLayer = wmsBuild();
+    if (!wmsLayer) { prefs.wms.on = false; toast('Bitte Adresse und Layer-Namen eintragen.'); }
+    else { wmsLayer.addTo(map); wmsLayer.bringToFront(); }
+  }
+  if (map.hasLayer(ormLayer)) ormLayer.bringToFront();
+  saveStore();
+  syncButtons();
+}
+
+function wmsLogin() {
+  const url = (prefs.wms.url || '').trim();
+  if (!url) { toast('Bitte zuerst die Adresse des Dienstes eintragen.'); return; }
+  // GetCapabilities aufrufen: Der Browser fragt die Zugangsdaten ab und merkt sie
+  // sich für die Domain. Nebenbei sieht man dort die verfügbaren Layer.
+  const sep = url.includes('?') ? '&' : '?';
+  window.open(url + sep + 'SERVICE=WMS&REQUEST=GetCapabilities', '_blank', 'noopener');
+  toast('Im neuen Tab anmelden und speichern lassen, dann hierher zurück.');
 }
 
 /* -------- Kilometersteine zeichnen -------- */
@@ -1131,7 +1194,8 @@ function locate() {
 function loadStore() {
   try {
     const raw = JSON.parse(localStorage.getItem(STORE_KEY) || '{}');
-    prefs = { ...prefs, ...(raw.prefs || {}) };
+    const wms = { ...prefs.wms, ...((raw.prefs && raw.prefs.wms) || {}) };
+    prefs = { ...prefs, ...(raw.prefs || {}), wms };
     recent = Array.isArray(raw.recent) ? raw.recent : [];
   } catch { /* defekter Speicher — Standardwerte behalten */ }
 }
@@ -1198,6 +1262,12 @@ function syncButtons() {
     b.classList.toggle('is-on', b.dataset.theme === (prefs.theme || 'auto')));
   const orm = $('#ormBtn');
   if (orm && map) orm.classList.toggle('is-on', map.hasLayer(ormLayer));
+
+  const wt = $('#wmsToggle');
+  if (wt) {
+    wt.classList.toggle('is-on', !!(prefs.wms && prefs.wms.on));
+    wt.textContent = prefs.wms && prefs.wms.on ? 'Ausblenden' : 'Anzeigen';
+  }
 }
 
 function updateHash() {
@@ -1264,6 +1334,29 @@ function bind() {
 
   $('#locBtn').addEventListener('click', locate);
   $('#shareBtn').addEventListener('click', share);
+
+  // WMS: Adresse und Layer merken, Zugangsdaten bleiben beim Browser
+  $('#wmsUrl').value = prefs.wms.url || '';
+  $('#wmsLayers').value = prefs.wms.layers || '';
+  $('#wmsOpacity').value = prefs.wms.opacity || 75;
+
+  const wmsSave = () => {
+    prefs.wms.url = $('#wmsUrl').value.trim();
+    prefs.wms.layers = $('#wmsLayers').value.trim();
+    saveStore();
+    if (prefs.wms.on) wmsApply(true);      // mit neuen Angaben neu aufbauen
+  };
+  $('#wmsUrl').addEventListener('change', wmsSave);
+  $('#wmsLayers').addEventListener('change', wmsSave);
+
+  $('#wmsOpacity').addEventListener('input', ev => {
+    prefs.wms.opacity = Number(ev.target.value);
+    if (wmsLayer) wmsLayer.setOpacity(prefs.wms.opacity / 100);
+  });
+  $('#wmsOpacity').addEventListener('change', saveStore);
+
+  $('#wmsLogin').addEventListener('click', () => { wmsSave(); wmsLogin(); });
+  $('#wmsToggle').addEventListener('click', () => { wmsSave(); wmsApply(!prefs.wms.on); });
 
   document.addEventListener('keydown', ev => {
     if (ev.key === 'Escape') { closeSheet(); closeSuggest(); }
