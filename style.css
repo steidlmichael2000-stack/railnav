@@ -54,6 +54,11 @@ html[data-theme="light"] {
 
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 
+/* Das hidden-Attribut ist nur eine Browserregel und verliert gegen jedes eigene
+ * display: -- ohne diese Zeile stehen als versteckt markierte Bloecke wie die
+ * Farbwahl je Datei, das XML-Feld beim WMS oder der Nordknopf trotzdem offen. */
+[hidden] { display: none !important; }
+
 html, body { height: 100%; }
 
 body {
@@ -266,8 +271,28 @@ body {
 .sheet-sec + .sheet-sec { border-top: 1px solid var(--line); }
 .sheet-sec h2 {
   font-size: .68rem; font-weight: 600; letter-spacing: .5px; text-transform: uppercase;
-  color: var(--muted-2); margin: 0 0 9px;
+  color: var(--muted-2); margin: 0;
 }
+
+/* Jeder Abschnitt klappt zu: Das Menü ist sonst eine sehr lange Rolle, und die
+ * Farb- und Symbolwahl je Datei bringt noch einmal reichlich Bedienelemente mit. */
+.sheet-sec > summary {
+  display: flex; align-items: center; gap: 7px;
+  padding: 3px 0; cursor: pointer;
+  list-style: none;
+}
+.sheet-sec > summary::-webkit-details-marker { display: none; }
+.sheet-sec > summary::before {
+  content: ""; flex: none;
+  width: 7px; height: 7px;
+  border-right: 1.6px solid var(--muted-2); border-bottom: 1.6px solid var(--muted-2);
+  transform: rotate(-45deg); margin-left: 2px;
+  transition: transform .15s;
+}
+.sheet-sec[open] > summary::before { transform: rotate(45deg); }
+.sheet-sec[open] > summary { margin-bottom: 9px; }
+.sheet-sec[open] > summary h2 { color: var(--muted); }
+.sheet-sec > summary:hover h2 { color: var(--text); }
 
 .stack { display: flex; flex-direction: column; gap: 8px; margin-bottom: 8px; }
 .stack input {
@@ -360,6 +385,15 @@ body {
 }
 .kml-dot:active { filter: brightness(1.15); }
 
+.kml-edit-kopf { display: flex; align-items: baseline; gap: 8px; }
+.kml-edit-kopf .kml-lab { flex: 1; }
+.kml-zu {
+  flex: none; padding: 3px 9px;
+  border: 1px solid var(--line); border-radius: 8px;
+  background: var(--glass); color: var(--muted);
+  font: inherit; font-size: .74rem; font-weight: 600; cursor: pointer;
+}
+
 .kml-edit {
   display: flex; flex-direction: column; gap: 6px;
   padding: 8px 10px;
@@ -405,6 +439,9 @@ body {
   display: inline-flex; align-items: center; gap: 4px;
   font-size: .74rem; color: var(--muted); font-variant-numeric: tabular-nums;
 }
+
+/* inline würde die Grundlinie mitrechnen und das Symbol um ein Haar versetzen */
+.kml-sym svg { display: block; }
 
 /* Name neben dem Symbol auf der Karte — wie die Kilometerbeschriftung */
 .kml-lbl {

@@ -133,6 +133,12 @@ async function tryFetch(url, timeout) {
     const r = await fetch(url, { signal: ctrl.signal, headers: { Accept: 'application/json' } });
     if (!r.ok) throw new Error('HTTP ' + r.status);
     return await r.json();
+  } catch (err) {
+    /* Bricht der Abruf an der Zeitgrenze ab, meldet der Browser das als
+     * "signal is aborted without reason" — das hilft niemandem weiter. */
+    if (err.name === 'AbortError') throw new Error(`keine Antwort binnen ${Math.round(timeout / 1000)} s`);
+    if (err.name === 'TypeError') throw new Error('keine Verbindung');
+    throw err;
   } finally {
     clearTimeout(timer);
   }
@@ -146,7 +152,7 @@ async function getJson(url) {
     try {
       return await tryFetch('https://api.allorigins.win/raw?url=' + encodeURIComponent(url), 20000);
     } catch {
-      throw new Error(err.name === 'AbortError' ? 'Zeitüberschreitung' : err.message || 'Netzwerkfehler');
+      throw new Error(err.message || 'Netzwerkfehler');
     }
   }
 }
@@ -441,7 +447,9 @@ async function railGeometry(a, b) {
     try { data = await tryFetch(ep + '?data=' + encodeURIComponent(q), 40000); break; }
     catch (err) { lastErr = err; }
   }
-  if (!data) throw new Error('Overpass nicht erreichbar (' + (lastErr && lastErr.message) + ')');
+  if (!data) {
+    throw new Error('kein Overpass-Server hat geantwortet (' + (lastErr && lastErr.message || 'unbekannt') + ')');
+  }
   return (data.elements || []).filter(w => w.geometry && w.geometry.length > 1);
 }
 
@@ -1388,7 +1396,7 @@ function kmlEbene(akte) {
           })
         : L.marker(o.koord, {
             pane: 'kmlPane', bubblingMouseEvents: false,
-            icon: L.divIcon({ className: '', iconSize: [14, 14], iconAnchor: [7, 7],
+            icon: L.divIcon({ className: 'kml-sym', iconSize: [14, 14], iconAnchor: [7, 7],
               html: kmlSymbolSvg(punktForm, punktFarbe) })
           });
     } else if (o.art === 'l') {
@@ -1470,6 +1478,8 @@ function kmlGroesse(b) {
     : Math.max(1, Math.round(b / 1024)) + ' KB';
 }
 
+let kmlOffeneKlappe = null;      // Index der Datei, deren Aussehen gerade offen steht
+
 function kmlListe() {
   const box = $('#kmlList');
   if (!box) return;
@@ -1500,6 +1510,10 @@ function kmlListe() {
         </button>
       </div>
       <div class="kml-edit" data-kedit="${i}" hidden>
+        <div class="kml-edit-kopf">
+          <p class="kml-lab">Aussehen — ${esc(a.name)}</p>
+          <button class="kml-zu" type="button" data-kzu="${i}">Fertig</button>
+        </div>
         <p class="kml-lab">Farbe</p>
         <div class="kml-wahl">${KML_FARBEN.map(c =>
           `<button class="kml-farbe${c === a.farbe ? ' is-on' : ''}" type="button" data-kfarbe="${i}"
@@ -1533,9 +1547,24 @@ function kmlListe() {
   }).join('');
 
   box.querySelectorAll('[data-kstil]').forEach(btn => btn.addEventListener('click', () => {
-    const feld = box.querySelector(`[data-kedit="${btn.dataset.kstil}"]`);
-    if (feld) feld.hidden = !feld.hidden;
+    const i = btn.dataset.kstil;
+    const feld = box.querySelector(`[data-kedit="${i}"]`);
+    if (!feld) return;
+    feld.hidden = !feld.hidden;
+    kmlOffeneKlappe = feld.hidden ? null : Number(i);
   }));
+
+  box.querySelectorAll('[data-kzu]').forEach(btn => btn.addEventListener('click', () => {
+    const feld = box.querySelector(`[data-kedit="${btn.dataset.kzu}"]`);
+    if (feld) feld.hidden = true;
+    kmlOffeneKlappe = null;
+  }));
+
+  // Nach dem Neuzeichnen die zuvor offene Klappe wieder aufmachen
+  if (kmlOffeneKlappe != null) {
+    const feld = box.querySelector(`[data-kedit="${kmlOffeneKlappe}"]`);
+    if (feld) feld.hidden = false;
+  }
 
   const stilGesetzt = (i, aenderung) => {
     const a = kmlAkten[i];
@@ -1545,8 +1574,9 @@ function kmlListe() {
     if (a.sichtbar) kmlZeigen(a, true);      // mit neuem Aussehen neu aufbauen
     kmlLabels();
     kmlListe();
+    kmlOffeneKlappe = i;                     // Klappe offen lassen, man probiert meist mehrere
     const feld = $('#kmlList').querySelector(`[data-kedit="${i}"]`);
-    if (feld) feld.hidden = false;           // Klappe offen lassen, man probiert meist mehrere
+    if (feld) feld.hidden = false;
   };
 
   box.querySelectorAll('[data-kfarbe]').forEach(btn => btn.addEventListener('click', () =>
@@ -1834,7 +1864,9 @@ async function linesNear(lat, lon) {
     try { data = await tryFetch(ep + '?data=' + encodeURIComponent(q), 25000); break; }
     catch (err) { lastErr = err; }
   }
-  if (!data) throw new Error('Overpass nicht erreichbar (' + (lastErr && lastErr.message) + ')');
+  if (!data) {
+    throw new Error('kein Overpass-Server hat geantwortet (' + (lastErr && lastErr.message || 'unbekannt') + ')');
+  }
 
   const els = data.elements || [];
 
@@ -1884,7 +1916,13 @@ async function lookupByClick(lat, lon) {
       showPicker(refs, seed.km, lat, lon);
     }
   } catch (err) {
-    showError('Umkreissuche fehlgeschlagen: ' + err.message);
+    /* Overpass liefert die Gleisgeometrie und ist der einzige Weg, an beliebiger
+     * Stelle herauszufinden, welche Strecke dort liegt. Die Meldung soll deshalb
+     * sagen, was fehlt und wie es trotzdem weitergeht. */
+    showError(`Hier ließ sich nicht ermitteln, welche Strecke liegt: ${err.message}. ` +
+      `Die Abfrage läuft über den fremden Dienst Overpass, der häufig überlastet ist. ` +
+      `Mit Streckennummer und Kilometer oben geht es ohne ihn — oder näher an ein Gleis der ` +
+      `schon geladenen Strecke tippen.`);
   } finally {
     setBusy(false);
   }
@@ -2484,7 +2522,22 @@ function bind() {
     if (ev.key === 'Escape') { closeSheet(); closeSuggest(); }
   });
 
+  bindSheetSections();
   window.addEventListener('resize', updateBH);
+}
+
+/* Welche Abschnitte des Menüs offen stehen, bleibt gemerkt — sonst schiebt man
+ * sich jedes Mal wieder durch alles nach unten. */
+function bindSheetSections() {
+  const bloecke = [...document.querySelectorAll('#sheet [data-sec]')];
+  const offen = Array.isArray(prefs.offen) ? prefs.offen : ['karte', 'kml'];
+  for (const b of bloecke) b.open = offen.includes(b.dataset.sec);
+  for (const b of bloecke) {
+    b.addEventListener('toggle', () => {
+      prefs.offen = bloecke.filter(x => x.open).map(x => x.dataset.sec);
+      saveStore();
+    });
+  }
 }
 
 function boot() {

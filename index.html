@@ -73,17 +73,17 @@
   <!-- ---------- Menü ---------- -->
   <div id="sheet" class="sheet" hidden>
 
-    <section class="sheet-sec">
-      <h2>Betriebsstelle suchen</h2>
+    <details class="sheet-sec" data-sec="stelle">
+      <summary><h2>Betriebsstelle suchen</h2></summary>
       <div class="row">
         <input id="facQ" type="text" placeholder="Name, DS100 oder UIC" autocomplete="off" spellcheck="false" enterkeyhint="search">
         <button id="facGo" class="btn" type="button">Suchen</button>
       </div>
       <div id="facOut" class="fac-out"></div>
-    </section>
+    </details>
 
-    <section class="sheet-sec">
-      <h2>Karte</h2>
+    <details class="sheet-sec" data-sec="karte">
+      <summary><h2>Karte</h2></summary>
       <div class="seg" role="group" aria-label="Kartenhintergrund">
         <button class="seg-btn" type="button" data-base="osm">Karte</button>
         <button class="seg-btn" type="button" data-base="sat">Luftbild</button>
@@ -94,10 +94,10 @@
         <span id="baseOpacityVal" class="slider-val">100&thinsp;%</span>
       </label>
       <p class="fine">Ganz nach links heruntergezogen bleibt nur der Bahn- bzw. WMS-Layer stehen.</p>
-    </section>
+    </details>
 
-    <section class="sheet-sec">
-      <h2>Eigene KML-Dateien</h2>
+    <details class="sheet-sec" data-sec="kml">
+      <summary><h2>Eigene KML-Dateien</h2></summary>
       <div class="row">
         <button id="kmlAdd" class="btn" type="button">KML oder KMZ öffnen</button>
       </div>
@@ -123,10 +123,10 @@
       <p class="fine">Die Dateien werden nur auf diesem Gerät ausgewertet und dort gespeichert —
       nichts davon geht ins Netz. Linienfarben und -stärken der Datei werden übernommen, solange
       keine eigene Farbe gewählt ist; eigene Symbolbilder und Bildüberlagerungen nicht.</p>
-    </section>
+    </details>
 
-    <section class="sheet-sec">
-      <h2>Eigener WMS-Layer</h2>
+    <details class="sheet-sec" data-sec="wms">
+      <summary><h2>Eigener WMS-Layer</h2></summary>
       <div class="stack">
         <input id="wmsUrl" type="url" placeholder="https://server/dienst" autocomplete="off" spellcheck="false" inputmode="url">
         <input id="wmsLayers" type="text" placeholder="Layer-Name, mehrere mit Komma" autocomplete="off" spellcheck="false">
@@ -157,19 +157,19 @@
       Browserdialog Benutzer und Kennwort eingeben und speichern lassen. Der Browser hängt die
       Daten danach selbst an die Kartenanfragen — die App kennt und speichert sie nicht.
       Adresse und Layer-Name bleiben lokal auf diesem Gerät.</p>
-    </section>
+    </details>
 
-    <section class="sheet-sec">
-      <h2>Ansicht</h2>
+    <details class="sheet-sec" data-sec="ansicht">
+      <summary><h2>Ansicht</h2></summary>
       <div class="seg" role="group" aria-label="Helligkeit">
         <button class="seg-btn" type="button" data-theme="auto">Automatisch</button>
         <button class="seg-btn" type="button" data-theme="light">Hell</button>
         <button class="seg-btn" type="button" data-theme="dark">Dunkel</button>
       </div>
-    </section>
+    </details>
 
-    <section class="sheet-sec">
-      <h2>Hinweise</h2>
+    <details class="sheet-sec" data-sec="hinweise">
+      <summary><h2>Hinweise</h2></summary>
       <p class="fine"><strong>Keine amtliche Quelle.</strong> Die Positionen stammen aus in
       OpenStreetMap erfassten Kilometersteinen und taugen zur groben Verortung — nicht für
       Vermessung, Disposition oder sicherheitsrelevante Entscheidungen. Zwischen zwei Steinen
@@ -177,7 +177,7 @@
       <p class="fine">Daten © OpenStreetMap-Mitwirkende · Abfrage über die OpenRailwayMap-API ·
       Bahn-Layer OpenRailwayMap (CC-BY-SA 2.0) · Luftbild Esri</p>
       <p class="fine"><a href="https://github.com/steidlmichael2000-stack/railnav" target="_blank" rel="noopener">Quellcode auf GitHub</a></p>
-    </section>
+    </details>
 
   </div>
 
