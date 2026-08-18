@@ -5,7 +5,7 @@
  * neue Version sofort ankommt statt hinter einem alten Cache zu hängen.
  */
 
-const VERSION = 'v3';
+const VERSION = 'v4';
 const SHELL = `railnav-shell-${VERSION}`;
 const TILES = `railnav-tiles-${VERSION}`;
 const DATA = `railnav-data-${VERSION}`;
@@ -13,7 +13,7 @@ const KEEP = [SHELL, TILES, DATA];
 
 const SHELL_FILES = [
   './', 'index.html', 'style.css', 'app.js',
-  'vendor/leaflet.js', 'vendor/leaflet.css',
+  'vendor/leaflet.js', 'vendor/leaflet.css', 'vendor/leaflet-rotate.js',
   'manifest.webmanifest', 'icon.svg'
 ];
 

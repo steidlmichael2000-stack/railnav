@@ -22,7 +22,9 @@ am Rechner und lässt sich als App auf den Startbildschirm legen.
   Betriebsstellensuche über Name, DS100 oder UIC.
 - **Eigener WMS-Layer** als Overlay, auch für zugangsgeschützte Dienste (siehe unten).
 - **Hintergrund verblassen** — Karte oder Luftbild stufenlos bis auf null, dann bleibt nur der
-  Bahn- bzw. WMS-Layer stehen.
+  Bahn- bzw. WMS-Layer stehen; darunter liegt Weiß, damit schwarze Strichzeichnungen auch im
+  Dunkelmodus lesbar bleiben.
+- **Karte drehen** mit zwei Fingern; ein Nordknopf erscheint, sobald sie verdreht ist.
 - **Offlinefähig** — die App selbst und bereits geladene Kartenkacheln bleiben ohne Netz nutzbar.
 
 Eingabe: `12,5` oder `12.5`, auch Hektometer-Schreibweise `14+250` (= km 14,250).
@@ -170,25 +172,18 @@ python -m http.server 8000
 
 ## Lizenz und Attribution
 
-Code: [MIT](LICENSE).
+Code: **[GPL-3.0](LICENSE)**.
+
+Das Projekt lag ursprünglich unter MIT. Für die Kartendrehung wird
+[leaflet-rotate](https://github.com/Raruto/leaflet-rotate) gebraucht — Leaflet selbst kann nicht
+drehen —, und das steht unter GPL-3.0. Weil GPL Copyleft ist, lässt sich ein Werk, das GPL-Code
+enthält, nicht unter MIT weitergeben; das ganze Projekt folgt deshalb der GPL-3.0. Praktisch heißt
+das: Nutzen, ändern und weitergeben ist frei, wer es weitergibt muss den Quellcode ebenfalls unter
+GPL-3.0 offenhalten.
 
 Karten- und Bahndaten: © OpenStreetMap-Mitwirkende
 ([ODbL](https://www.openstreetmap.org/copyright)), Bahn-Layer von
 [OpenRailwayMap](https://www.openrailwaymap.org/) (CC-BY-SA 2.0), Luftbilder von Esri.
-[Leaflet](https://leafletjs.com/) (BSD-2-Clause) liegt unter `vendor/` bei, damit die App
-ohne CDN und offline läuft.
-
-### Kartendrehung
-
-Der Code ist auf Drehen mit zwei Fingern vorbereitet (samt Nordknopf), die Erweiterung liegt aber
-absichtlich **nicht** bei: [leaflet-rotate](https://github.com/Raruto/leaflet-rotate) steht unter
-**GPL-3.0** und ist mit der MIT-Lizenz dieses Projekts nicht vereinbar — GPL-Code lässt sich nicht
-unter MIT weitergeben. Wer die Drehung will, hat zwei Wege: das Projekt selbst auf GPL-3.0 stellen,
-oder die Erweiterung nur lokal einbinden und nicht mitveröffentlichen. Dazu genügt
-
-```bash
-curl -o vendor/leaflet-rotate.js https://unpkg.com/leaflet-rotate@0.2.8/dist/leaflet-rotate-src.js
-```
-
-und ein `<script src="vendor/leaflet-rotate.js"></script>` vor `app.js` in der `index.html`.
-Danach schaltet sich die Drehung samt Nordknopf von selbst frei.
+Unter `vendor/` liegen [Leaflet](https://leafletjs.com/) (BSD-2-Clause) und
+[leaflet-rotate](https://github.com/Raruto/leaflet-rotate) (GPL-3.0) bei, damit die App ohne CDN
+und offline läuft.

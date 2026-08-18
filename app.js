@@ -7,6 +7,13 @@
  * Die API kennt nur die erste Richtung; die zweite rechnet der Browser aus den
  * bereits geladenen Steinen. Nur wenn weit weg von der geladenen Strecke geklickt
  * wird, muss Overpass sagen, welche Strecke dort überhaupt liegt.
+ *
+ * Copyright (C) 2026 Michael Steidl
+ *
+ * Dieses Programm ist freie Software: Sie können es unter den Bedingungen der
+ * GNU General Public License, Version 3, weitergeben und/oder verändern.
+ * Es wird ohne jede Gewährleistung bereitgestellt — siehe die Datei LICENSE
+ * oder <https://www.gnu.org/licenses/>.
  */
 
 'use strict';

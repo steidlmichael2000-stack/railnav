@@ -162,11 +162,10 @@
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
 <script src="vendor/leaflet.js"></script>
-<!-- Kartendrehung: Leaflet kann das nicht von Haus aus. Die Erweiterung
-     leaflet-rotate leistet es, steht aber unter GPL-3.0 und ist mit der
-     MIT-Lizenz dieses Projekts nicht vereinbar. Der Code hier ist darauf
-     vorbereitet: Liegt "vendor/leaflet-rotate.js" vor und wird hier
-     eingebunden, schaltet sich die Drehung samt Nordknopf von selbst frei. -->
+<!-- Kartendrehung: Leaflet kann das nicht von Haus aus, leaflet-rotate ergaenzt
+     es. Die Erweiterung steht unter GPL-3.0 — deshalb ist dieses Projekt
+     ebenfalls GPL-3.0 lizenziert. -->
+<script src="vendor/leaflet-rotate.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
