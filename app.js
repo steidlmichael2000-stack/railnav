@@ -403,9 +403,12 @@ function projectOnLine(sorted, lat, lon) {
     const cx = ax + t * dx, cy = ay + t * dy;
     const dist = Math.hypot(px - cx, py - cy);
     if (!best || dist < best.dist) {
-      // chord: Abstand der beiden Steine — entscheidet, ob die Feinrechnung lohnt
+      // chord entscheidet, welche Zeile von TAP_ERR gilt; spanRatio verraet
+      // Kilometerspruenge und falsch zusammengepaarte Steine.
+      const chord = Math.sqrt(len2);
       best = { dist, km: a.km + t * dkm, lat: cy / ky, lon: cx / kx,
-        between: [a.km, b.km], chord: Math.sqrt(len2) };
+        between: [a.km, b.km], chord,
+        spanRatio: dkm ? chord / (Math.abs(dkm) * 1000) : null };
     }
   }
   return best;
@@ -1497,7 +1500,7 @@ async function onMapClick(ev) {
     if (hit && hit.dist <= tol) {
       applyPoint(view.ref, hit.km, {
         lat: hit.lat, lon: hit.lon, quality: 'karte',
-        between: hit.between, offset: hit.dist, chord: hit.chord,
+        between: hit.between, offset: hit.dist, chord: hit.chord, spanRatio: hit.spanRatio,
         operator: e.sorted[0].operator, lineRef: view.ref
       });
       coverage(view.ref, hit.km).then(drawMilestones).catch(() => { });
@@ -1621,7 +1624,7 @@ async function useLineAt(ref, seedKm, lat, lon) {
     }
     applyPoint(ref, hit.km, {
       lat: hit.lat, lon: hit.lon, quality: 'karte',
-      between: hit.between, offset: hit.dist, chord: hit.chord,
+      between: hit.between, offset: hit.dist, chord: hit.chord, spanRatio: hit.spanRatio,
       operator: e.sorted[0].operator, lineRef: ref
     });
   } catch (err) {
@@ -1737,6 +1740,17 @@ function renderBottom() {
       `Das steckt fast ganz in der Erfassung der Steine, nicht in der Sehnennäherung — eine ` +
       `Feinrechnung entlang des Gleises würde daran nur wenige Meter ändern und bleibt deshalb der ` +
       `umgekehrten Richtung vorbehalten.`;
+    /* Die Ausnahme, in der die Spanne oben nicht mehr gilt: Passen Luftlinie und
+     * Kilometerdifferenz der beiden Steine nicht zusammen, steckt dahinter ein
+     * Kilometersprung oder ein falsch erfasster Stein. Über dieselben 2050
+     * Testfälle lag das ungünstige Zehntel solcher Paare bei 183 m statt 49 m —
+     * und diese Fälle liegen auf gerader Strecke, ein Gleisverlauf hilft nicht. */
+    if (p.spanRatio != null && p.spanRatio < 0.75) {
+      warn = `<p class="bb-note">Luftlinie und Kilometerdifferenz der beiden Steine passen nicht zusammen ` +
+        `(${Math.round(p.spanRatio * 100)} %) — starker Bogen oder Kilometersprung. Im zweiten Fall liegt der ` +
+        `Kilometer weit außerhalb der oben genannten Spanne; nachgemessen lag das ungünstige Zehntel solcher ` +
+        `Stellen bei 183 m statt 49 m.</p>`;
+    }
   } else if (p.quality === 'interpoliert') {
     // Der Steinabstand ist der eigentliche Genauigkeitsfaktor, nicht die Rechnung selbst
     detail = `Geradlinig gerechnet zwischen den Steinen bei km ${fmtKm(p.between[0])} und ${fmtKm(p.between[1])}, ` +

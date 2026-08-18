@@ -137,6 +137,21 @@ Bogenlänge — der Sehnenanteil wächst mit dem Sinus des überstrichenen Winke
 dem Winkel selbst, und beide fallen zur Bogenmitte hin zusammen. Übrig bleiben ein paar Meter aus
 der Krümmung; der Rest ist die Erfassungsgenauigkeit der Steine.
 
+**Die Ausnahme steht nicht in der Tabelle.** 1,6 % der Testfälle lagen über 100 m daneben — und zwar
+nicht in Bögen: Der übersprungene Stein lag dort im Median nur 13,6 m von der Sehne entfernt, also auf
+gerader Strecke, wo der tatsächliche Gleisverlauf mit der Sehne zusammenfällt. Ihr Kennzeichen ist ein
+anderes, nämlich das Verhältnis von Luftlinie zu Kilometerdifferenz: im Median 0,93 gegenüber 0,99 bei
+den übrigen. Unterhalb von 0,75 lag das ungünstige Zehntel bei **183 m statt 49 m**. Dahinter stecken
+Kilometersprünge und falsch erfasste Steine — nichts, was ein Gleisverlauf reparieren könnte. Genau
+diese Prüfung machte die App bisher nur in der Richtung km → Position; jetzt warnt sie auch nach einem
+Kartentipp.
+
+Ebenfalls geprüft und verworfen: eine Ausgleichsgerade über ein Fenster von acht Steinen statt der
+beiden Nachbarn. Median 15 m gegenüber 14 m, 90. Perzentil 45 m gegenüber 48 m, besser in genau 50 %
+der Fälle. Die Streuung der beiden Klammersteine ist also nicht der begrenzende Faktor — was bleibt,
+ist die Streuung des Vergleichssteins selbst, mit dem gemessen wird. Die Zahlen der Tabelle sind damit
+wie in der anderen Richtung eine Obergrenze und nicht der Fehler des Verfahrens.
+
 **Deshalb gibt es in dieser Richtung bewusst keine Feinrechnung entlang des Gleises.** Sie könnte
 nur diese wenigen Meter wegnehmen und kostet eine Overpass-Abfrage von 15–40 s. Angezeigt wird
 stattdessen die gemessene Zahl: Das Etikett lautet „von der Karte ±57 m", und unter *Herkunft &
