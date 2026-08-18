@@ -628,11 +628,17 @@ function initMap() {
     bearing: 0
   }).setView([51.1, 10.3], 6);
 
-  /* Eigene Ebene für KML-Dateien, und zwar über allem anderen: Wer eine eigene
-   * Datei mitbringt, will sie sehen und nicht unter den Kilometersteinen suchen.
-   * 620 liegt über dem Marker-Pane (600), aber unter Sprechblasen (700). */
-  map.createPane('kmlPane');
-  map.getPane('kmlPane').style.zIndex = 620;
+  /* Zwei eigene Ebenen für KML-Dateien, und die müssen im richtigen Elternteil
+   * hängen: leaflet-rotate teilt die Panes auf. Kacheln und Vektoren liegen unter
+   * rotatePane, Marker und Sprechblasen unter norotatePane, und der gepatchte
+   * SVG-Renderer rechnet in rotatePane-Koordinaten. Eine Pane direkt unter
+   * mapPane sieht erst richtig aus und verschiebt sich dann beim Zoomen einer
+   * gedrehten Karte — gemessen 36/-78 px nach einem Zoomschritt bei 30 Grad,
+   * und der Versatz bleibt. Genau das waren die Punkte, die "komisch springen". */
+  map.createPane('kmlPane', map._rotatePane || undefined);
+  map.getPane('kmlPane').style.zIndex = 450;        // über Kacheln und eigener Linie
+  map.createPane('kmlIconPane', map._norotatePane || undefined);
+  map.getPane('kmlIconPane').style.zIndex = 620;    // über allen Markern, unter Sprechblasen
 
   baseOsm = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
     maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
@@ -1389,16 +1395,14 @@ function kmlEbene(akte) {
     if (o.art === 'p') {
       const punktFarbe = akte.farbeFest ? grund : (s.punkt || farbe);
       const punktForm = autoKarte ? (autoKarte.get(kmlWert(o, akte.autoFeld)) || 'kreis') : form;
-      l = punktForm === 'kreis' && !autoKarte
-        ? L.circleMarker(o.koord, {
-            ...basis, radius: 5, weight: 2, color: '#fff',
-            fillColor: punktFarbe, fillOpacity: 1
-          })
-        : L.marker(o.koord, {
-            pane: 'kmlPane', bubblingMouseEvents: false,
-            icon: L.divIcon({ className: 'kml-sym', iconSize: [14, 14], iconAnchor: [7, 7],
-              html: kmlSymbolSvg(punktForm, punktFarbe) })
-          });
+      /* Auch der einfache Kreis läuft als Icon und nicht als circleMarker: So
+       * liegen Punkt und Name in derselben Ebene ganz oben, und der Renderer,
+       * der bei gedrehter Karte Ärger macht, ist für Punkte gar nicht im Spiel. */
+      l = L.marker(o.koord, {
+        pane: 'kmlIconPane', bubblingMouseEvents: false,
+        icon: L.divIcon({ className: 'kml-sym', iconSize: [14, 14], iconAnchor: [7, 7],
+          html: kmlSymbolSvg(punktForm, punktFarbe) })
+      });
     } else if (o.art === 'l') {
       l = L.polyline(o.koord, basis);
     } else {
@@ -1450,7 +1454,7 @@ function kmlLabels() {
       if (!wo || !bild.contains(wo)) continue;
       if (++n > KML_LABEL_MAX) return;      // Rest weglassen, statt alles zuzukleistern
       L.marker(wo, {
-        pane: 'kmlPane', interactive: false, keyboard: false,
+        pane: 'kmlIconPane', interactive: false, keyboard: false,
         icon: L.divIcon({ className: '', iconSize: null, iconAnchor: [-8, 7],
           html: `<span class="kml-lbl">${esc(txt)}</span>` })
       }).addTo(kmlLabelLayer);
