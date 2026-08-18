@@ -341,6 +341,45 @@ function interpolationError(chordM) {
   return ERR_TABLE.find(r => chordM < r.upTo);
 }
 
+/* Und in der anderen Richtung: Wie genau ist der Kilometer, der aus einem Tipp
+ * auf die Karte gelesen wird? Nachgemessen an 2060 echten Steintripeln — den
+ * mittleren Stein übersprungen, seine wahre Lage auf die Sehne der beiden
+ * Nachbarn projiziert und den dort gelesenen Kilometer mit seinem echten
+ * verglichen. Das ist genau dieser Fall, nur mit bekannter Wahrheit:
+ *
+ *   Steinabstand   Median   90. Perzentil
+ *   unter 250 m      10 m       33 m
+ *   250– 700 m       14 m       47 m
+ *   700–1200 m       20 m       57 m
+ *  1200–2000 m       19 m       56 m
+ *  2000–3100 m       17 m       60 m
+ *
+ * Zwei Dinge fallen auf: Jenseits von 700 m wächst der Fehler nicht weiter, und
+ * getrennt nach Krümmung liegen nahezu gerade Abschnitte bei 14/49 m, ausgeprägte
+ * Bögen bei 19/71 m. Die Sehnennäherung ist hier also kaum schuld — beim Tippen
+ * steht die Position ja fest, und entlang eines Kreisbogens ist die Projektion
+ * auf die Sehne fast proportional zur Bogenlänge, weil sich die Abweichung zur
+ * Mitte hin aufhebt. Übrig bleibt die Erfassungsgenauigkeit der Steine.
+ *
+ * Deshalb gibt es in dieser Richtung bewusst keine Feinrechnung entlang des
+ * Gleises: Sie könnte nur diese wenigen Meter wegnehmen und kostet eine
+ * Overpass-Abfrage von einigen Sekunden.
+ *
+ * Mehr als 3 km Steinabstand kommen hier nicht vor: Weiter auseinanderliegende
+ * Steine werden fürs Zeichnen und Antippen gar nicht verbunden (MAX_DRAW_GAP_KM).
+ */
+const TAP_ERR = [
+  { upTo: 250, typical: 10, worst: 33 },
+  { upTo: 700, typical: 14, worst: 47 },
+  { upTo: 1200, typical: 20, worst: 57 },
+  { upTo: 2000, typical: 19, worst: 56 },
+  { upTo: Infinity, typical: 17, worst: 60 }
+];
+
+function tapError(chordM) {
+  return TAP_ERR.find(r => chordM < r.upTo);
+}
+
 /** Nächster Punkt auf dem Streckenzug der Kilometersteine — liefert auch den Kilometer dort. */
 function projectOnLine(sorted, lat, lon) {
   if (!sorted || sorted.length < 2) return null;
@@ -364,7 +403,9 @@ function projectOnLine(sorted, lat, lon) {
     const cx = ax + t * dx, cy = ay + t * dy;
     const dist = Math.hypot(px - cx, py - cy);
     if (!best || dist < best.dist) {
-      best = { dist, km: a.km + t * dkm, lat: cy / ky, lon: cx / kx, between: [a.km, b.km] };
+      // chord: Abstand der beiden Steine — entscheidet, ob die Feinrechnung lohnt
+      best = { dist, km: a.km + t * dkm, lat: cy / ky, lon: cx / kx,
+        between: [a.km, b.km], chord: Math.sqrt(len2) };
     }
   }
   return best;
@@ -1628,7 +1669,8 @@ function qualityTag(p) {
     // orange wird es erst, wenn die Steine wirklich weit auseinanderstehen.
     return { cls: p.err.worst > 50 ? 'warn' : 'ok', text: `interpoliert ±${nfM.format(p.err.worst)} m` };
   }
-  if (p.quality === 'karte') return { cls: 'warn', text: 'von der Karte' };
+  // Beim Tippen kommt die Unsicherheit des eigenen Fingers hinzu — bleibt orange
+  if (p.quality === 'karte') return { cls: 'warn', text: `von der Karte ±${nfM.format(tapError(p.chord || 0).worst)} m` };
   if (p.quality === 'betriebsstelle') return { cls: 'ok', text: 'Betriebsstelle' };
   const d = Math.abs(p.delta || 0);
   return { cls: d > 1 ? 'bad' : 'warn', text: `${fmtKm(d)} km daneben` };
@@ -1642,7 +1684,8 @@ function renderBottom() {
   const tag = qualityTag(p);
   let title, sub;
 
-  // Feinrechnung nur anbieten, wo sie etwas bringt
+  /* Feinrechnung nur anbieten, wo sie etwas bringt: in der Richtung km → Position.
+   * Beim Kartentipp bringt sie nichts — siehe TAP_ERR. */
   const refine = (p.quality === 'interpoliert' && p.chord > REFINE_MIN_CHORD)
     ? `<button type="button" id="refineBtn" class="refine">Punkt auf das Gleis rechnen` +
       `<small>folgt dem echten Verlauf statt der Luftlinie · braucht Netz, dauert einige Sekunden</small></button>`
@@ -1685,8 +1728,15 @@ function renderBottom() {
       detail = `Solche Widersprüche entstehen, wenn dieselbe Streckennummer in OpenStreetMap an mehreren Stellen vergeben ist oder Steine falsch erfasst wurden.`;
     }
   } else if (p.quality === 'karte') {
-    detail = `Aus dem Kartentipp abgeleitet, zwischen den Steinen bei km ${fmtKm(p.between[0])} und ${fmtKm(p.between[1])}` +
-      (p.offset > 15 ? `, ${nfM.format(p.offset)} m querab der Linie` : '') + `.`;
+    const err = tapError(p.chord || 0);
+    detail = `Aus dem Kartentipp abgeleitet, zwischen den Steinen bei km ${fmtKm(p.between[0])} und ` +
+      `${fmtKm(p.between[1])}, ${nfM.format(p.chord || 0)} m auseinander` +
+      (p.offset > 15 ? `, ${nfM.format(p.offset)} m querab der Linie` : '') + `. ` +
+      `An echten Zwischensteinen nachgemessen lag der so gelesene Kilometer typisch ` +
+      `${nfM.format(err.typical)} m neben dem wahren, im ungünstigen Zehntel ${nfM.format(err.worst)} m. ` +
+      `Das steckt fast ganz in der Erfassung der Steine, nicht in der Sehnennäherung — eine ` +
+      `Feinrechnung entlang des Gleises würde daran nur wenige Meter ändern und bleibt deshalb der ` +
+      `umgekehrten Richtung vorbehalten.`;
   } else if (p.quality === 'interpoliert') {
     // Der Steinabstand ist der eigentliche Genauigkeitsfaktor, nicht die Rechnung selbst
     detail = `Geradlinig gerechnet zwischen den Steinen bei km ${fmtKm(p.between[0])} und ${fmtKm(p.between[1])}, ` +

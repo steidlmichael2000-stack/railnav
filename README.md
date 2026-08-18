@@ -111,6 +111,37 @@ danebenlag und wie weit der jeweils nächstgelegene Stein entfernt war:
 Stein steht, ist es fast egal. Deshalb interpoliert Railnav grundsätzlich und fällt nur dann auf
 den nächstgelegenen Stein zurück, wenn es kein brauchbares Steinpaar gibt.
 
+### Und umgekehrt: Wie genau ist ein Tipp auf die Karte?
+
+Dieselbe Prüfmethode auf die andere Richtung angewandt — über **2060 Steintripel** den mittleren
+Stein übersprungen, seine tatsächliche Lage auf die Sehne der beiden Nachbarn projiziert und den
+dort abgelesenen Kilometer mit seinem echten verglichen. Das ist genau der Fall „auf das Gleis
+getippt", nur mit bekannter Wahrheit:
+
+| Steinabstand | Median | 90. Perzentil |
+| --- | --- | --- |
+| unter 250 m | 10 m | 33 m |
+| 250–700 m | 14 m | 47 m |
+| 700–1200 m | 20 m | 57 m |
+| 1200–2000 m | 19 m | 56 m |
+| 2000–3100 m | 17 m | 60 m |
+
+Zwei Dinge fallen auf: Jenseits von 700 m wächst der Fehler **nicht weiter**, und getrennt nach
+Krümmung liegen nahezu gerade Abschnitte bei 14 m / 49 m, ausgeprägte Bögen bei 19 m / 71 m. Die
+Sehnennäherung ist hier also kaum schuld — anders als in der Richtung km → Position, wo sie bei
+3 km Steinabstand 375 m Fehler machte.
+
+Der Grund ist Geometrie: Beim Tippen steht die Position schon fest, gesucht ist nur der Kilometer.
+Entlang eines Kreisbogens verhält sich die Projektion auf die Sehne aber fast proportional zur
+Bogenlänge — der Sehnenanteil wächst mit dem Sinus des überstrichenen Winkels, der Bogenanteil mit
+dem Winkel selbst, und beide fallen zur Bogenmitte hin zusammen. Übrig bleiben ein paar Meter aus
+der Krümmung; der Rest ist die Erfassungsgenauigkeit der Steine.
+
+**Deshalb gibt es in dieser Richtung bewusst keine Feinrechnung entlang des Gleises.** Sie könnte
+nur diese wenigen Meter wegnehmen und kostet eine Overpass-Abfrage von 15–40 s. Angezeigt wird
+stattdessen die gemessene Zahl: Das Etikett lautet „von der Karte ±57 m", und unter *Herkunft &
+Genauigkeit* steht, woher der Wert kommt.
+
 ### Zwei weitere Fallstricke, die die App abfängt
 
 1. **Die API antwortet unsortiert.** Sie liefert Steine im Umkreis von 10 km um die angefragte
