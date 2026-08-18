@@ -313,6 +313,59 @@ body {
 }
 .fac-item small { display: block; color: var(--muted); font-size: .76rem; margin-top: 1px; }
 
+/* ---------- Liste der geladenen KML-Dateien ---------- */
+
+.kml-list:not(:empty) { margin: 8px 0; display: flex; flex-direction: column; gap: 6px; }
+
+.kml-item { display: flex; gap: 6px; }
+
+.kml-tog {
+  flex: 1; min-width: 0;
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 12px; text-align: left;
+  border: 1px solid var(--line); border-radius: 11px;
+  background: var(--panel-2); color: var(--muted); font: inherit; font-size: .88rem; cursor: pointer;
+}
+.kml-tog.is-on {
+  border-color: var(--accent); color: var(--text);
+  background: color-mix(in srgb, var(--accent) 11%, transparent);
+}
+
+/* Der Punkt zeigt die Farbe, in der die Datei auf der Karte liegt */
+.kml-dot { flex: none; width: 11px; height: 11px; border-radius: 50%; opacity: .3; }
+.kml-tog.is-on .kml-dot { opacity: 1; }
+
+.kml-txt { min-width: 0; }
+.kml-nm, .kml-txt small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kml-txt small { color: var(--muted-2); font-size: .74rem; }
+
+.kml-ic {
+  flex: none; width: 40px;
+  display: grid; place-items: center;
+  border: 1px solid var(--line); border-radius: 11px;
+  background: var(--panel-2); color: var(--muted); cursor: pointer;
+}
+.kml-ic svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+.kml-ic:active { filter: brightness(1.15); }
+.kml-ic.del:active { color: var(--bad); }
+
+/* ---------- Sprechblase eines KML-Objekts ---------- */
+
+.leaflet-popup-content-wrapper, .leaflet-popup-tip {
+  background: var(--glass); color: var(--text);
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+}
+.leaflet-popup-content-wrapper { border: 1px solid var(--line); border-radius: 13px; }
+.leaflet-popup-content { margin: 11px 13px; font-size: .82rem; line-height: 1.5; }
+.leaflet-popup-close-button { color: var(--muted-2) !important; }
+
+.kml-pop b { display: block; font-size: .92rem; font-weight: 650; margin-bottom: 2px; }
+.kml-pop span { display: block; color: var(--muted); white-space: pre-line; }
+.kml-pop i { font-style: normal; color: var(--muted-2); }
+.kml-pop a { display: inline-block; margin-top: 6px; color: var(--accent); }
+.kml-pop small { display: block; margin-top: 6px; color: var(--muted-2); font-size: .68rem; }
+
 .fine { font-size: .74rem; color: var(--muted); line-height: 1.6; margin: 0 0 8px; }
 .fine:last-child { margin-bottom: 0; }
 .fine strong { color: var(--text); }
@@ -434,6 +487,12 @@ html[data-theme="light"] .bb-actions .maps { color: #fff; }
   z-index: 900; max-width: calc(100% - 28px); text-align: center;
 }
 .toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+/* Vier Knöpfe passen auf engen Bildschirmen nicht in eine Zeile */
+@media (max-width: 430px) {
+  .bb-actions { flex-wrap: wrap; }
+  .bb-actions .maps { flex: 1 1 100%; }
+}
 
 @media (max-width: 380px) {
   .field label { font-size: .6rem; }

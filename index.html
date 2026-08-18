@@ -88,6 +88,23 @@
     </section>
 
     <section class="sheet-sec">
+      <h2>Eigene KML-Dateien</h2>
+      <div class="row">
+        <button id="kmlAdd" class="btn" type="button">KML oder KMZ öffnen</button>
+      </div>
+      <input id="kmlFile" type="file" multiple hidden
+             accept=".kml,.kmz,application/vnd.google-earth.kml+xml,application/vnd.google-earth.kmz">
+      <div id="kmlList" class="kml-list"></div>
+
+      <p class="fine">Jede Datei bleibt in der Liste stehen und lässt sich einzeln ein- und
+      ausschalten. Ein Tipp auf ein Objekt zeigt Name, Beschreibung und Zusatzdaten; die beiden
+      Knöpfe daneben zoomen auf die Datei bzw. nehmen sie aus der Liste.</p>
+      <p class="fine">Die Dateien werden nur auf diesem Gerät ausgewertet und dort gespeichert —
+      nichts davon geht ins Netz. Linienfarben und -stärken der Datei werden übernommen,
+      eigene Symbolbilder und Bildüberlagerungen nicht.</p>
+    </section>
+
+    <section class="sheet-sec">
       <h2>Eigener WMS-Layer</h2>
       <div class="stack">
         <input id="wmsUrl" type="url" placeholder="https://server/dienst" autocomplete="off" spellcheck="false" inputmode="url">
@@ -127,17 +144,6 @@
         <button class="seg-btn" type="button" data-theme="auto">Automatisch</button>
         <button class="seg-btn" type="button" data-theme="light">Hell</button>
         <button class="seg-btn" type="button" data-theme="dark">Dunkel</button>
-      </div>
-      <div class="seg" role="group" aria-label="Kartendrehung" id="rotateGroup" style="margin-top:7px" hidden>
-        <button class="seg-btn" type="button" id="rotateBtn">Drehen mit zwei Fingern</button>
-      </div>
-    </section>
-
-    <section class="sheet-sec">
-      <h2>Aktionen</h2>
-      <div class="row">
-        <button id="locBtn" class="btn" type="button">Mein Standort</button>
-        <button id="shareBtn" class="btn" type="button">Link teilen</button>
       </div>
     </section>
 

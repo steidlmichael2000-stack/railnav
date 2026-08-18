@@ -572,10 +572,15 @@ function initMap() {
   map = L.map('map', {
     zoomControl: false, attributionControl: true, tap: true,
     // Drehung über leaflet-rotate; eigener Nordknopf statt des mitgelieferten
-    rotate: true, rotateControl: false,
-    touchRotate: prefs.rotate !== false,
+    rotate: true, rotateControl: false, touchRotate: true,
     bearing: 0
   }).setView([51.1, 10.3], 6);
+
+  /* Eigene Ebene für KML-Dateien: über den Kacheln, aber unter den
+   * Kilometersteinen und dem gesuchten Punkt — die App soll ihre eigenen
+   * Marken nicht hinter einer geladenen Datei verstecken. */
+  map.createPane('kmlPane');
+  map.getPane('kmlPane').style.zIndex = 350;
 
   baseOsm = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
     maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
@@ -801,6 +806,540 @@ function wmsLogin() {
   toast('Im neuen Tab anmelden und speichern lassen, dann hierher zurück.');
 }
 
+/* -------- Eigene KML-Dateien -------- */
+
+/* Warum IndexedDB und nicht localStorage: Ein KML mit einigen tausend Objekten
+ * sprengt die rund 5 MB, die localStorage zugesteht. Abgelegt wird die schon
+ * ausgewertete Geometrie statt des XML — beim Start ist dann nichts mehr zu
+ * parsen. Kopfdaten und Geometrie liegen getrennt, damit das Ein- und
+ * Ausschalten nur ein paar Byte schreibt und nicht die ganze Datei.
+ *
+ * Die Dateien bleiben auf dem Gerät, es wird nichts hochgeladen. */
+
+const KML_DB = 'railnav-kml';
+/* Reihum vergeben, damit sich mehrere Dateien ohne eigene Farbangabe
+ * voneinander unterscheiden. */
+const KML_FARBEN = ['#e6484b', '#f59e0b', '#22c55e', '#4b93e6', '#a855f7', '#14b8a6', '#ec4899', '#84cc16'];
+const KML_VIEL = 4000;        // ab so vielen Objekten wird vor Trägheit gewarnt
+
+let kmlAkten = [];                    // Kopfdaten samt Geometrie, in Ladereihenfolge
+const kmlEbenen = new Map();          // id → Leaflet-Gruppe der sichtbaren Datei
+
+/* -------- Speicher -------- */
+
+let kmlOffen = null;
+function kmlDb() {
+  if (kmlOffen) return kmlOffen;
+  kmlOffen = new Promise((ok, fehler) => {
+    const rq = indexedDB.open(KML_DB, 1);
+    rq.onupgradeneeded = () => {
+      const db = rq.result;
+      db.createObjectStore('akten', { keyPath: 'id' });   // klein: Name, Farbe, sichtbar
+      db.createObjectStore('geo');                        // groß: die Objekte, id als Schlüssel
+    };
+    rq.onsuccess = () => ok(rq.result);
+    rq.onerror = () => fehler(rq.error || new Error('kein lokaler Speicher verfügbar'));
+  });
+  return kmlOffen;
+}
+
+function kmlKopf(akte) {
+  const kopf = { ...akte };
+  delete kopf.objekte;
+  return kopf;
+}
+
+async function kmlLaden() {
+  const db = await kmlDb();
+  return new Promise((ok, fehler) => {
+    const tx = db.transaction(['akten', 'geo'], 'readonly');
+    const rq = tx.objectStore('akten').getAll();
+    const geo = new Map();
+    tx.objectStore('geo').openCursor().onsuccess = ev => {
+      const c = ev.target.result;
+      if (!c) return;
+      geo.set(c.key, c.value);
+      c.continue();
+    };
+    tx.oncomplete = () => ok((rq.result || [])
+      .map(a => ({ ...a, objekte: geo.get(a.id) || [] }))
+      .sort((a, b) => (a.angelegt || 0) - (b.angelegt || 0)));
+    tx.onerror = () => fehler(tx.error);
+  });
+}
+
+async function kmlAblegen(akte) {
+  const db = await kmlDb();
+  return new Promise((ok, fehler) => {
+    const tx = db.transaction(['akten', 'geo'], 'readwrite');
+    tx.objectStore('akten').put(kmlKopf(akte));
+    tx.objectStore('geo').put(akte.objekte, akte.id);
+    tx.oncomplete = ok;
+    tx.onerror = () => fehler(tx.error);
+  });
+}
+
+/** Nur die Kopfdaten schreiben — beim Umschalten soll nicht die Geometrie neu durch. */
+async function kmlKopfMerken(akte) {
+  try {
+    const db = await kmlDb();
+    await new Promise((ok, fehler) => {
+      const tx = db.transaction('akten', 'readwrite');
+      tx.objectStore('akten').put(kmlKopf(akte));
+      tx.oncomplete = ok;
+      tx.onerror = () => fehler(tx.error);
+    });
+  } catch { /* dann gilt der Schalter nur für diese Sitzung */ }
+}
+
+async function kmlLoeschen(id) {
+  const db = await kmlDb();
+  return new Promise((ok, fehler) => {
+    const tx = db.transaction(['akten', 'geo'], 'readwrite');
+    tx.objectStore('akten').delete(id);
+    tx.objectStore('geo').delete(id);
+    tx.oncomplete = ok;
+    tx.onerror = () => fehler(tx.error);
+  });
+}
+
+/* -------- KML auswerten -------- */
+
+/* Namensräume durchweg ignorieren: KML setzt einen Default-Namespace, an dem
+ * querySelector scheitert, und gx:-Erweiterungen bringen einen zweiten mit. */
+const kmlErst = (el, name) => el.getElementsByTagNameNS('*', name)[0] || null;
+const kmlText = (el, name) => { const c = kmlErst(el, name); return c ? c.textContent.trim() : ''; };
+const kmlKind = (el, name) => { for (const c of el.children) if (c.localName === name) return c; return null; };
+
+/** KML-Farbe ist aabbggrr — umgedreht und mit der Deckkraft vorne. */
+function kmlFarbe(roh) {
+  const t = String(roh || '').trim().replace(/^#/, '');
+  if (!/^[0-9a-f]{8}$/i.test(t)) return null;
+  return {
+    farbe: ('#' + t.slice(6, 8) + t.slice(4, 6) + t.slice(2, 4)).toLowerCase(),
+    deckung: parseInt(t.slice(0, 2), 16) / 255
+  };
+}
+
+function kmlStil(el) {
+  const s = {};
+  const linie = kmlErst(el, 'LineStyle');
+  if (linie) {
+    const f = kmlFarbe(kmlText(linie, 'color'));
+    if (f) { s.color = f.farbe; s.opacity = f.deckung; }
+    const w = parseFloat(kmlText(linie, 'width'));
+    if (isFinite(w) && w > 0) s.weight = Math.min(w, 10);
+  }
+  const flaeche = kmlErst(el, 'PolyStyle');
+  if (flaeche) {
+    const f = kmlFarbe(kmlText(flaeche, 'color'));
+    if (f) { s.fillColor = f.farbe; s.fillOpacity = Math.min(f.deckung, 0.5); }
+    if (kmlText(flaeche, 'fill') === '0') s.fill = false;
+  }
+  const symbol = kmlErst(el, 'IconStyle');
+  if (symbol) {
+    const f = kmlFarbe(kmlText(symbol, 'color'));
+    // Weiß ist in Google Earth der ungefärbte Standardstift, keine Absicht
+    if (f && f.farbe !== '#ffffff') s.punkt = f.farbe;
+  }
+  return s;
+}
+
+/** "lon,lat,alt lon,lat,alt …" → [[lat, lon], …] */
+function kmlKoord(roh) {
+  const raus = [];
+  for (const tupel of String(roh || '').trim().split(/\s+/)) {
+    const t = tupel.split(',');
+    const lon = parseFloat(t[0]), lat = parseFloat(t[1]);
+    if (isFinite(lat) && isFinite(lon) && Math.abs(lat) <= 90 && Math.abs(lon) <= 180) raus.push([lat, lon]);
+  }
+  return raus;
+}
+
+function kmlGeo(el, raus) {
+  switch (el.localName) {
+    case 'Point': {
+      const c = kmlKoord(kmlText(el, 'coordinates'));
+      if (c.length) raus.push({ art: 'p', koord: c[0] });
+      break;
+    }
+    case 'LineString': case 'LinearRing': {
+      const c = kmlKoord(kmlText(el, 'coordinates'));
+      if (c.length > 1) raus.push({ art: 'l', koord: c });
+      break;
+    }
+    case 'Polygon': {
+      // Der äußere Ring steht in KML zuerst, danach folgen die Löcher
+      const ringe = [];
+      for (const r of el.getElementsByTagNameNS('*', 'LinearRing')) {
+        const c = kmlKoord(kmlText(r, 'coordinates'));
+        if (c.length > 2) ringe.push(c);
+      }
+      if (ringe.length) raus.push({ art: 'a', koord: ringe });
+      break;
+    }
+    case 'Track': {           // gx:Track — Aufzeichnung, Koordinaten mit Leerzeichen getrennt
+      const c = [];
+      for (const g of el.getElementsByTagNameNS('*', 'coord')) {
+        const t = g.textContent.trim().split(/\s+/);
+        const lon = parseFloat(t[0]), lat = parseFloat(t[1]);
+        if (isFinite(lat) && isFinite(lon)) c.push([lat, lon]);
+      }
+      if (c.length > 1) raus.push({ art: 'l', koord: c });
+      break;
+    }
+    case 'MultiGeometry': case 'MultiTrack':
+      for (const ch of el.children) kmlGeo(ch, raus);
+      break;
+  }
+}
+
+/* Beschreibungen enthalten oft ganze HTML-Tabellen. Übernommen wird nur der
+ * Text — über DOMParser, damit nichts davon ausgeführt oder nachgeladen wird. */
+function kmlKlartext(roh) {
+  const t = String(roh || '').trim();
+  if (!t) return '';
+  if (!/[<&]/.test(t)) return t;
+  const d = new DOMParser().parseFromString(t, 'text/html');
+  return (d.body.textContent || '').replace(/[ \t]+/g, ' ').replace(/\n\s*\n+/g, '\n').trim();
+}
+
+function kmlDaten(pm) {
+  const raus = [];
+  const ext = kmlErst(pm, 'ExtendedData');
+  if (!ext) return raus;
+  for (const d of ext.getElementsByTagNameNS('*', 'Data')) {
+    const k = (d.getAttribute('name') || '').trim(), v = kmlText(d, 'value');
+    if (k || v) raus.push([k, v]);
+  }
+  for (const d of ext.getElementsByTagNameNS('*', 'SimpleData')) {
+    const k = (d.getAttribute('name') || '').trim(), v = d.textContent.trim();
+    if (k || v) raus.push([k, v]);
+  }
+  return raus.slice(0, 14);
+}
+
+/** Ordnerpfad des Objekts — hilft beim Zuordnen, wenn ein KML viele Gruppen hat. */
+function kmlOrdner(pm) {
+  const teile = [];
+  for (let p = pm.parentElement; p; p = p.parentElement) {
+    if (p.localName !== 'Folder') continue;
+    const n = kmlKind(p, 'name');
+    if (n) teile.unshift(n.textContent.trim());
+  }
+  return teile.join(' › ');
+}
+
+function kmlParse(xmlText) {
+  const doc = new DOMParser().parseFromString(xmlText, 'application/xml');
+  if (doc.getElementsByTagName('parsererror').length) throw new Error('kein lesbares KML');
+
+  /* Stile sammeln. Eine StyleMap zeigt auf einen Style; aufgelöst wird erst
+   * hinterher, weil die Reihenfolge im Dokument beliebig ist. */
+  const stile = new Map();
+  for (const el of doc.getElementsByTagNameNS('*', 'Style')) {
+    const id = el.getAttribute('id');
+    if (id) stile.set('#' + id, kmlStil(el));
+  }
+  for (const el of doc.getElementsByTagNameNS('*', 'StyleMap')) {
+    const id = el.getAttribute('id');
+    if (!id) continue;
+    for (const paar of el.getElementsByTagNameNS('*', 'Pair')) {
+      if (kmlText(paar, 'key') === 'highlight') continue;   // nur der Zustand unter dem Zeiger
+      const ziel = kmlText(paar, 'styleUrl');
+      if (ziel) stile.set('#' + id, ziel);
+    }
+  }
+  const stilFuer = url => {
+    let v = stile.get(String(url || '').trim());
+    for (let i = 0; i < 4 && typeof v === 'string'; i++) v = stile.get(v);
+    // Absichtlich dasselbe Objekt für alle Objekte eines Stils — spart Speicher
+    return v && typeof v === 'object' ? v : null;
+  };
+
+  const objekte = [];
+  let sLat = 90, wLon = 180, nLat = -90, oLon = -180;
+  const merken = k => {
+    if (k[0] < sLat) sLat = k[0];
+    if (k[0] > nLat) nLat = k[0];
+    if (k[1] < wLon) wLon = k[1];
+    if (k[1] > oLon) oLon = k[1];
+  };
+
+  for (const pm of doc.getElementsByTagNameNS('*', 'Placemark')) {
+    const geo = [];
+    for (const ch of pm.children) kmlGeo(ch, geo);
+    if (!geo.length) continue;
+
+    const eigen = kmlKind(pm, 'Style');
+    const nEl = kmlKind(pm, 'name'), dEl = kmlKind(pm, 'description');
+    const gemeinsam = {
+      name: nEl ? nEl.textContent.trim() : '',
+      text: dEl ? kmlKlartext(dEl.textContent).slice(0, 700) : '',
+      daten: kmlDaten(pm),
+      ordner: kmlOrdner(pm),
+      stil: eigen ? kmlStil(eigen) : stilFuer(kmlText(pm, 'styleUrl'))
+    };
+
+    for (const g of geo) {
+      if (g.art === 'p') merken(g.koord);
+      else if (g.art === 'l') g.koord.forEach(merken);
+      else g.koord.forEach(r => r.forEach(merken));
+      objekte.push({ ...g, ...gemeinsam });
+    }
+  }
+
+  const doku = kmlErst(doc, 'Document');
+  const titelEl = doku && kmlKind(doku, 'name');
+
+  return {
+    objekte,
+    titel: titelEl ? titelEl.textContent.trim() : '',
+    grenzen: objekte.length && nLat >= sLat ? [[sLat, wLon], [nLat, oLon]] : null
+  };
+}
+
+/* -------- KMZ auspacken -------- */
+
+/* Ein KMZ ist ein ZIP mit einer KML darin. Gelesen wird über das zentrale
+ * Verzeichnis am Dateiende: Nur dort stehen die Größen verlässlich — bei
+ * gestreamt geschriebenen ZIPs sind sie im lokalen Kopf null. Das Aufblasen
+ * macht DecompressionStream, dafür braucht es keine Fremdbibliothek. */
+function kmzEintraege(buf) {
+  const dv = new DataView(buf), u8 = new Uint8Array(buf);
+  let eocd = -1;
+  for (let i = u8.length - 22; i >= 0 && i > u8.length - 22 - 65536; i--) {
+    if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
+  }
+  if (eocd < 0) throw new Error('kein lesbares KMZ');
+
+  const anzahl = dv.getUint16(eocd + 10, true);
+  let p = dv.getUint32(eocd + 16, true);
+  const raus = [];
+  for (let n = 0; n < anzahl && p + 46 <= u8.length && dv.getUint32(p, true) === 0x02014b50; n++) {
+    const verfahren = dv.getUint16(p + 10, true);
+    const gepackt = dv.getUint32(p + 20, true);
+    const nameLen = dv.getUint16(p + 28, true);
+    const extraLen = dv.getUint16(p + 30, true);
+    const kommLen = dv.getUint16(p + 32, true);
+    const lokal = dv.getUint32(p + 42, true);
+    const name = new TextDecoder().decode(u8.subarray(p + 46, p + 46 + nameLen));
+    // Der Datenbeginn steht erst im lokalen Kopf, dessen Zusatzfeld abweichen darf
+    const lNameLen = dv.getUint16(lokal + 26, true), lExtraLen = dv.getUint16(lokal + 28, true);
+    const start = lokal + 30 + lNameLen + lExtraLen;
+    raus.push({ name, verfahren, daten: u8.subarray(start, start + gepackt) });
+    p += 46 + nameLen + extraLen + kommLen;
+  }
+  return raus;
+}
+
+async function kmzText(buf) {
+  const eintraege = kmzEintraege(buf);
+  const kml = eintraege.find(e => /^doc\.kml$/i.test(e.name)) ||
+              eintraege.find(e => /\.kml$/i.test(e.name));
+  if (!kml) throw new Error('im KMZ steckt keine KML-Datei');
+  if (kml.verfahren === 0) return kmlDekodieren(kml.daten.slice().buffer);
+  if (kml.verfahren !== 8) throw new Error('unbekannte Packmethode im KMZ');
+  if (typeof DecompressionStream !== 'function') throw new Error('dieser Browser kann KMZ nicht entpacken');
+  const strom = new Blob([kml.daten]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+  return kmlDekodieren(await new Response(strom).arrayBuffer());
+}
+
+/** Ältere KML kommen in ISO-8859-1 — sonst werden Umlaute zu Fragezeichen. */
+function kmlDekodieren(buf) {
+  const kopf = new TextDecoder('utf-8').decode(new Uint8Array(buf, 0, Math.min(200, buf.byteLength)));
+  const m = /encoding=["']([\w-]+)["']/i.exec(kopf);
+  const enc = (m ? m[1] : 'utf-8').toLowerCase();
+  if (enc === 'utf-8' || enc === 'utf8') return new TextDecoder('utf-8').decode(buf);
+  try { return new TextDecoder(enc).decode(buf); }
+  catch { return new TextDecoder('utf-8').decode(buf); }
+}
+
+/* -------- Zeichnen -------- */
+
+function kmlPopup(o, akte) {
+  const zeilen = [];
+  if (o.name) zeilen.push(`<b>${esc(o.name)}</b>`);
+  if (o.text) zeilen.push(`<span>${esc(o.text)}</span>`);
+  for (const [k, v] of (o.daten || [])) zeilen.push(`<span><i>${esc(k)}</i> ${esc(v)}</span>`);
+  if (o.art === 'p') {
+    zeilen.push(`<span>${fmtCoord(o.koord[0], o.koord[1])}</span>`);
+    zeilen.push(`<a href="${gmapsUrl(o.koord[0], o.koord[1])}" target="_blank" rel="noopener">In Google Maps öffnen</a>`);
+  }
+  const herkunft = [akte.name, o.ordner].filter(Boolean).join(' › ');
+  if (herkunft) zeilen.push(`<small>${esc(herkunft)}</small>`);
+  return zeilen.join('');
+}
+
+function kmlEbene(akte) {
+  const gruppe = L.featureGroup();
+  const grund = akte.farbe || KML_FARBEN[0];
+
+  for (const o of akte.objekte) {
+    const s = o.stil || {};
+    const farbe = s.color || grund;
+    const basis = {
+      pane: 'kmlPane',
+      color: farbe,
+      weight: s.weight || (o.art === 'a' ? 2 : 3),
+      opacity: s.opacity == null ? 0.95 : s.opacity,
+      // Ein Tipp auf ein KML-Objekt soll nicht zusätzlich die Kilometersuche auslösen
+      bubblingMouseEvents: false
+    };
+
+    let l;
+    if (o.art === 'p') {
+      l = L.circleMarker(o.koord, {
+        ...basis, radius: 5, weight: 2, color: '#fff',
+        fillColor: s.punkt || farbe, fillOpacity: 1
+      });
+    } else if (o.art === 'l') {
+      l = L.polyline(o.koord, basis);
+    } else {
+      l = L.polygon(o.koord, {
+        ...basis,
+        fill: s.fill !== false,
+        fillColor: s.fillColor || farbe,
+        fillOpacity: s.fillOpacity == null ? 0.18 : s.fillOpacity
+      });
+    }
+
+    const html = kmlPopup(o, akte);
+    if (html) {
+      l.bindPopup(html, {
+        className: 'kml-pop', maxWidth: 300,
+        autoPanPaddingTopLeft: L.point(14, 86), autoPanPaddingBottomRight: L.point(14, 24)
+      });
+    }
+    l.addTo(gruppe);
+  }
+  return gruppe;
+}
+
+function kmlZeigen(akte, sichtbar) {
+  const alt = kmlEbenen.get(akte.id);
+  if (alt) { map.removeLayer(alt); kmlEbenen.delete(akte.id); }
+  akte.sichtbar = !!sichtbar;
+  if (!sichtbar) return;
+  const ebene = kmlEbene(akte);
+  ebene.addTo(map);
+  kmlEbenen.set(akte.id, ebene);
+}
+
+/* -------- Liste im Menü -------- */
+
+function kmlGroesse(b) {
+  if (!b) return '';
+  return b >= 950000
+    ? (b / 1048576).toFixed(1).replace('.', ',') + ' MB'
+    : Math.max(1, Math.round(b / 1024)) + ' KB';
+}
+
+function kmlListe() {
+  const box = $('#kmlList');
+  if (!box) return;
+
+  box.innerHTML = kmlAkten.map((a, i) => {
+    const unter = [nfM.format(a.anzahl || a.objekte.length) + ' Objekte', kmlGroesse(a.groesse), a.titel]
+      .filter(Boolean).join(' · ');
+    return `<div class="kml-item">
+      <button class="kml-tog${a.sichtbar ? ' is-on' : ''}" type="button" data-ktog="${i}"
+              aria-pressed="${a.sichtbar ? 'true' : 'false'}">
+        <span class="kml-dot" style="background:${esc(a.farbe)}"></span>
+        <span class="kml-txt"><span class="kml-nm">${esc(a.name)}</span><small>${esc(unter)}</small></span>
+      </button>
+      <button class="kml-ic" type="button" data-kzoom="${i}" aria-label="Auf ${esc(a.name)} zoomen">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4H4v5M15 4h5v5M15 20h5v-5M9 20H4v-5"/></svg>
+      </button>
+      <button class="kml-ic del" type="button" data-kdel="${i}" aria-label="${esc(a.name)} entfernen">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </div>`;
+  }).join('');
+
+  box.querySelectorAll('[data-ktog]').forEach(btn => btn.addEventListener('click', () => {
+    const a = kmlAkten[Number(btn.dataset.ktog)];
+    if (!a) return;
+    kmlZeigen(a, !a.sichtbar);
+    kmlKopfMerken(a);
+    kmlListe();
+  }));
+
+  box.querySelectorAll('[data-kzoom]').forEach(btn => btn.addEventListener('click', () => {
+    const a = kmlAkten[Number(btn.dataset.kzoom)];
+    if (!a) return;
+    if (!a.sichtbar) { kmlZeigen(a, true); kmlKopfMerken(a); kmlListe(); }
+    if (!a.grenzen) { toast('Zu dieser Datei ist keine Lage bekannt.'); return; }
+    closeSheet();
+    map.fitBounds(a.grenzen, { padding: [30, 30], maxZoom: 17 });
+  }));
+
+  box.querySelectorAll('[data-kdel]').forEach(btn => btn.addEventListener('click', async () => {
+    const a = kmlAkten[Number(btn.dataset.kdel)];
+    if (!a) return;
+    if (!confirm(a.name + ' aus der Liste entfernen? Die Datei auf dem Gerät bleibt erhalten.')) return;
+    kmlZeigen(a, false);
+    kmlAkten = kmlAkten.filter(x => x.id !== a.id);
+    kmlListe();
+    try { await kmlLoeschen(a.id); } catch { /* sonst ist sie nach dem Neuladen wieder da */ }
+  }));
+}
+
+/* -------- Dateien öffnen -------- */
+
+async function kmlOeffnen(dateien) {
+  let letzte = null, zahl = 0;
+
+  for (const datei of dateien) {
+    try {
+      const buf = await datei.arrayBuffer();
+      const istZip = buf.byteLength > 4 && new DataView(buf).getUint32(0, false) === 0x504b0304;
+      const roh = istZip ? await kmzText(buf) : kmlDekodieren(buf);
+      const geparst = kmlParse(roh);
+      if (!geparst.objekte.length) { toast(datei.name + ': keine Geometrie gefunden.'); continue; }
+
+      const akte = {
+        id: 'k' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+        name: datei.name.replace(/\.(kml|kmz)$/i, '') || 'KML',
+        titel: geparst.titel && geparst.titel !== datei.name ? geparst.titel : '',
+        farbe: KML_FARBEN[kmlAkten.length % KML_FARBEN.length],
+        groesse: datei.size,
+        anzahl: geparst.objekte.length,
+        angelegt: Date.now(),
+        sichtbar: true,
+        grenzen: geparst.grenzen,
+        objekte: geparst.objekte
+      };
+
+      try { await kmlAblegen(akte); }
+      catch { toast('Speichern nicht möglich — die Datei ist nur bis zum Neuladen da.'); }
+
+      kmlAkten.push(akte);
+      kmlZeigen(akte, true);
+      letzte = akte;
+      zahl++;
+    } catch (err) {
+      toast(datei.name + ': ' + err.message);
+    }
+  }
+
+  kmlListe();
+  if (!letzte) return;
+
+  if (letzte.grenzen) map.fitBounds(letzte.grenzen, { padding: [30, 30], maxZoom: 17 });
+  const viel = letzte.anzahl > KML_VIEL ? ' — bei so vielen kann die Karte träge werden' : '';
+  toast(zahl > 1
+    ? zahl + ' Dateien geladen.'
+    : `${letzte.name}: ${nfM.format(letzte.anzahl)} Objekte${viel}.`);
+}
+
+async function kmlBoot() {
+  try { kmlAkten = await kmlLaden(); }
+  catch { return; }        // privater Modus oder gesperrter Speicher
+  for (const a of kmlAkten) if (a.sichtbar) kmlZeigen(a, true);
+  kmlListe();
+}
+
 /* -------- Kilometersteine zeichnen -------- */
 
 /** Beschriftungsdichte nach Zoomstufe, damit die Karte nicht zuwächst. */
@@ -917,7 +1456,7 @@ async function onMapClick(ev) {
     if (hit && hit.dist <= tol) {
       applyPoint(view.ref, hit.km, {
         lat: hit.lat, lon: hit.lon, quality: 'karte',
-        between: hit.between, offset: hit.dist,
+        between: hit.between, offset: hit.dist, chord: hit.chord,
         operator: e.sorted[0].operator, lineRef: view.ref
       });
       coverage(view.ref, hit.km).then(drawMilestones).catch(() => { });
@@ -1041,7 +1580,7 @@ async function useLineAt(ref, seedKm, lat, lon) {
     }
     applyPoint(ref, hit.km, {
       lat: hit.lat, lon: hit.lon, quality: 'karte',
-      between: hit.between, offset: hit.dist,
+      between: hit.between, offset: hit.dist, chord: hit.chord,
       operator: e.sorted[0].operator, lineRef: ref
     });
   } catch (err) {
@@ -1179,6 +1718,7 @@ function renderBottom() {
       <a class="maps" href="${gmapsUrl(p.lat, p.lon)}" target="_blank" rel="noopener">In Google Maps öffnen</a>
       <a href="${gmapsRoute(p.lat, p.lon)}" target="_blank" rel="noopener">Route</a>
       <button type="button" id="copyBtn">Kopieren</button>
+      <button type="button" id="shareBtn">Teilen</button>
     </div>`;
 
   bindBottom();
@@ -1193,6 +1733,9 @@ function bindBottom() {
     if (!p) return;
     toast(await copyText(fmtCoord(p.lat, p.lon)) ? 'Koordinaten kopiert' : 'Kopieren nicht möglich');
   });
+
+  const teilen = $('#shareBtn');
+  if (teilen) teilen.addEventListener('click', share);
 
   const refine = $('#refineBtn');
   if (refine) refine.addEventListener('click', refineOnTrack);
@@ -1404,12 +1947,6 @@ function syncButtons() {
   const orm = $('#ormBtn');
   if (orm && map) orm.classList.toggle('is-on', map.hasLayer(ormLayer));
 
-  // Drehung nur anbieten, wenn die Erweiterung überhaupt eingebunden ist
-  const rg = $('#rotateGroup');
-  if (rg) rg.hidden = !(map && typeof map.setBearing === 'function');
-  const rb = $('#rotateBtn');
-  if (rb) rb.classList.toggle('is-on', prefs.rotate !== false);
-
   const wt = $('#wmsToggle');
   if (wt) {
     wt.classList.toggle('is-on', !!(prefs.wms && prefs.wms.on));
@@ -1491,19 +2028,25 @@ function bind() {
     syncNorth();
   });
 
-  on('#rotateBtn', 'click', () => {
-    prefs.rotate = !(prefs.rotate !== false);
-    if (map.touchRotate) {
-      if (prefs.rotate) map.touchRotate.enable();
-      else { map.touchRotate.disable(); if (map.setBearing) map.setBearing(0); syncNorth(); }
-    }
-    saveStore();
-    syncButtons();
-  });
-
-  on('#locBtn', 'click', locate);
   on('#mapLocBtn', 'click', locate);
-  on('#shareBtn', 'click', share);
+
+  // KML: Auswahl über den Knopf, am Rechner geht auch Hineinziehen
+  on('#kmlAdd', 'click', () => { const f = $('#kmlFile'); if (f) f.click(); });
+  on('#kmlFile', 'change', ev => {
+    const dateien = [...ev.target.files];
+    ev.target.value = '';        // dieselbe Datei soll erneut gewählt werden können
+    if (dateien.length) kmlOeffnen(dateien);
+  });
+  // Nur bei Dateien eingreifen — markierter Text soll weiter in die Felder fallen können
+  const zieht = ev => ev.dataTransfer && [...ev.dataTransfer.types].includes('Files');
+  window.addEventListener('dragover', ev => { if (zieht(ev)) ev.preventDefault(); });
+  window.addEventListener('drop', ev => {
+    if (!zieht(ev)) return;
+    ev.preventDefault();      // sonst öffnet der Browser die Datei und die App ist weg
+    const dateien = [...ev.dataTransfer.files].filter(f => /\.(kml|kmz)$/i.test(f.name));
+    if (dateien.length) kmlOeffnen(dateien);
+    else toast('Nur KML- und KMZ-Dateien.');
+  });
 
   // WMS: Adresse und Layer merken, Zugangsdaten bleiben beim Browser
   setVal('#wmsUrl', prefs.wms.url || '');
@@ -1549,6 +2092,7 @@ function boot() {
   applyTheme();
   initMap();
   bind();
+  kmlBoot();      // nebenher: die Karte soll nicht auf den Speicher warten
 
   if (readHash()) search();
   else if (recent[0]) $('#ref').value = recent[0].ref;

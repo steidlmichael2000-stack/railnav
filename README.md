@@ -20,6 +20,8 @@ am Rechner und lässt sich als App auf den Startbildschirm legen.
   Knopfdruck entlang des tatsächlichen Gleisverlaufs rechnen statt entlang der Luftlinie.
 - **Karte, Luftbild und Bahn-Layer** umschaltbar, eigener Standort, Link zum Teilen,
   Betriebsstellensuche über Name, DS100 oder UIC.
+- **Eigene KML- und KMZ-Dateien** öffnen — beliebig viele, jede einzeln ein- und ausschaltbar wie
+  in einer Ebenenliste. Sie bleiben auf dem Gerät und sind auch offline wieder da (siehe unten).
 - **Eigener WMS-Layer** als Overlay, auch für zugangsgeschützte Dienste (siehe unten).
 - **Hintergrund verblassen** — Karte oder Luftbild stufenlos bis auf null, dann bleibt nur der
   Bahn- bzw. WMS-Layer stehen; darunter liegt Weiß, damit schwarze Strichzeichnungen auch im
@@ -148,6 +150,37 @@ häufigste Grund, warum ein Layer beim Zoomen plötzlich verschwindet.
 Der Layer selbst bekommt `maxZoom: 22`. Leaflet setzt bei Kachel-Layern standardmäßig 18, wodurch
 ein WMS-Overlay beim Hineinzoomen verschwand; ein WMS rendert aber jeden Maßstab auf Anfrage und
 hat keine natürliche Obergrenze.
+
+## Eigene KML-Dateien
+
+**KML oder KMZ öffnen** im Menü lädt beliebig viele Dateien vom Gerät. Jede bleibt als Eintrag in
+einer Liste stehen und lässt sich einzeln ein- und ausschalten; der farbige Punkt zeigt, in welcher
+Farbe sie auf der Karte liegt, die beiden Knöpfe daneben zoomen auf die Datei bzw. nehmen sie aus
+der Liste. Ein Tipp auf ein Objekt zeigt Name, Beschreibung und die Felder aus `ExtendedData`, bei
+Punkten zusätzlich die Koordinate und einen Link zu Google Maps. Am Rechner geht auch, die Datei
+einfach ins Fenster zu ziehen.
+
+Gelesen werden `Point`, `LineString`, `LinearRing`, `Polygon` (auch mit Löchern), `MultiGeometry`
+und `gx:Track`, dazu `Style` und `StyleMap` (Zustand *normal*) mit Linienfarbe, Linienstärke und
+Flächenfarbe. Ordner werden nicht als eigene Schalter angeboten, der Ordnerpfad steht aber in der
+Sprechblase. Nicht unterstützt sind eigene Symbolbilder, `GroundOverlay`, `NetworkLink` und
+Modelle. Beschreibungen enthalten oft ganze HTML-Tabellen — übernommen wird nur deren Text, gelesen
+über `DOMParser`, damit nichts davon ausgeführt oder nachgeladen wird.
+
+**KMZ ohne Fremdbibliothek.** Ein KMZ ist ein ZIP mit einer KML darin. Gelesen wird das zentrale
+Verzeichnis am Dateiende: Nur dort stehen die Größen verlässlich — bei gestreamt geschriebenen ZIPs
+sind sie im lokalen Kopf null. Das Aufblasen macht `DecompressionStream('deflate-raw')`, das jeder
+aktuelle Browser mitbringt.
+
+**Gespeichert wird in IndexedDB**, nicht in localStorage: Dessen rund 5 MB sprengt schon ein
+mittelgroßes KML. Abgelegt wird die ausgewertete Geometrie statt des XML, sodass beim Start nichts
+mehr zu parsen ist. Kopfdaten (Name, Farbe, sichtbar) und Geometrie liegen in getrennten Stores —
+das Ein- und Ausschalten schreibt damit ein paar Byte statt der ganzen Datei. Die Dateien liegen
+auf dem Gerät und sind auch ohne Netz wieder da; hochgeladen wird nichts.
+
+Die Objekte liegen in einer eigenen Leaflet-Pane mit `z-index` 350: über den Kartenkacheln, aber
+unter den Kilometersteinen der App. Ein Tipp auf ein KML-Objekt löst die Kilometersuche nicht mit
+aus, sondern zeigt nur die Sprechblase.
 
 ## Grenzen
 
