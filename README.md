@@ -21,7 +21,8 @@ am Rechner und lässt sich als App auf den Startbildschirm legen.
 - **Karte, Luftbild und Bahn-Layer** umschaltbar, eigener Standort, Link zum Teilen,
   Betriebsstellensuche über Name, DS100 oder UIC.
 - **Eigene KML- und KMZ-Dateien** öffnen — beliebig viele, jede einzeln ein- und ausschaltbar wie
-  in einer Ebenenliste. Sie bleiben auf dem Gerät und sind auch offline wieder da (siehe unten).
+  in einer Ebenenliste, mit wählbarer Farbe, wählbarem Symbol und Namen auf der Karte. Sie bleiben
+  auf dem Gerät und sind auch offline wieder da (siehe unten).
 - **Eigener WMS-Layer** als Overlay, auch für zugangsgeschützte Dienste (siehe unten).
 - **Hintergrund verblassen** — Karte oder Luftbild stufenlos bis auf null, dann bleibt nur der
   Bahn- bzw. WMS-Layer stehen; darunter liegt Weiß, damit schwarze Strichzeichnungen auch im
@@ -31,6 +32,10 @@ am Rechner und lässt sich als App auf den Startbildschirm legen.
 
 Eingabe: `12,5` oder `12.5`, auch Hektometer-Schreibweise `14+250` (= km 14,250).
 Nur die Streckennummer ohne Kilometer zeigt den Streckenverlauf.
+
+Die Anzeige unten lässt sich über das **×** wieder wegdrücken, und der Fadenkreuz-Knopf auf der
+Karte schaltet das Ablesen durch Tippen ganz ab — dann wirft ein versehentlicher Tipp die Anzeige
+nicht mehr um. Kilometersteine bleiben antippbar, die trifft man nicht zufällig.
 
 ## Wie genau ist das?
 
@@ -200,15 +205,29 @@ hat keine natürliche Obergrenze.
 ## Eigene KML-Dateien
 
 **KML oder KMZ öffnen** im Menü lädt beliebig viele Dateien vom Gerät. Jede bleibt als Eintrag in
-einer Liste stehen und lässt sich einzeln ein- und ausschalten; der farbige Punkt zeigt, in welcher
-Farbe sie auf der Karte liegt, die beiden Knöpfe daneben zoomen auf die Datei bzw. nehmen sie aus
-der Liste. Ein Tipp auf ein Objekt zeigt Name, Beschreibung und die Felder aus `ExtendedData`, bei
-Punkten zusätzlich die Koordinate und einen Link zu Google Maps. Am Rechner geht auch, die Datei
-einfach ins Fenster zu ziehen.
+einer Liste stehen und lässt sich einzeln ein- und ausschalten; das Symbol links öffnet Farbe und
+Form, die beiden Knöpfe rechts zoomen auf die Datei bzw. nehmen sie aus der Liste. Ein Tipp auf ein
+Objekt zeigt Name, Beschreibung und die Merkmale, bei Punkten zusätzlich die Koordinate und einen
+Link zu Google Maps. Am Rechner geht auch, die Datei einfach ins Fenster zu ziehen. Die Objekte
+liegen in einer eigenen Pane über allem anderen, auch über den Kilometersteinen der App.
+
+**Symbole nach Merkmal.** Viele Ausgabeprogramme schreiben ihre Merkmale als Text in die
+Beschreibung, etwa `Code: PS2, Marker type: 3`. Besteht eine Zeile vollständig aus solchen
+`Schlüssel: Wert`-Stücken, wird sie in Merkmale zerlegt — bewusst streng, damit von einem Fließtext
+kein Trümmerfeld übrig bleibt. Danach lassen sich die Symbole **automatisch** unterscheiden: eine
+der zehn Formen je Merkmalswert, numerisch sortiert (2 vor 14), mit Legende in der Klappe. Trägt
+eine Datei ein Merkmal, dessen Name nach Typ aussieht, ist das beim Öffnen gleich voreingestellt;
+sonst liegt alles einheitlich als Kreis. Dieselben Merkmale lassen sich in die Beschriftung
+aufnehmen, etwa `5062AA00001 · PS2`.
+
+**Namen auf der Karte** erscheinen ab Zoomstufe 16 und höchstens 200 auf einmal, jeweils nur was
+im Bild liegt. Ohne diese Grenzen hängen bei einer Datei mit tausend Punkten tausend Textknoten in
+der Karte, und lesbar ist davon nichts.
 
 Gelesen werden `Point`, `LineString`, `LinearRing`, `Polygon` (auch mit Löchern), `MultiGeometry`
 und `gx:Track`, dazu `Style` und `StyleMap` (Zustand *normal*) mit Linienfarbe, Linienstärke und
-Flächenfarbe. Ordner werden nicht als eigene Schalter angeboten, der Ordnerpfad steht aber in der
+Flächenfarbe — eine selbst gewählte Farbe hat Vorrang, sonst hätte das Auswählen bei Dateien mit
+eigenem Stil keine Wirkung. Ordner werden nicht als eigene Schalter angeboten, der Ordnerpfad steht aber in der
 Sprechblase. Nicht unterstützt sind eigene Symbolbilder, `GroundOverlay`, `NetworkLink` und
 Modelle. Beschreibungen enthalten oft ganze HTML-Tabellen — übernommen wird nur deren Text, gelesen
 über `DOMParser`, damit nichts davon ausgeführt oder nachgeladen wird.

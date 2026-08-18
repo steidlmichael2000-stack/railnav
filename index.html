@@ -25,6 +25,15 @@
   <span>N</span>
 </button>
 
+<!-- Tippen auf die Karte scharf stellen: sonst wirft ein versehentlicher Tipp die Anzeige um -->
+<button id="mapTapBtn" class="maptap" type="button" aria-pressed="true"
+        aria-label="Kilometer durch Tippen auf die Karte ablesen">
+  <svg viewBox="0 0 24 24" aria-hidden="true">
+    <path d="M12 2.6v5.2M12 16.2v5.2M2.6 12h5.2M16.2 12h5.2"/>
+    <circle cx="12" cy="12" r="3.1"/>
+  </svg>
+</button>
+
 <!-- Standort direkt auf der Karte, über den Zoomknöpfen -->
 <button id="mapLocBtn" class="maploc" type="button" aria-label="Meinen Standort zeigen">
   <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -96,12 +105,24 @@
              accept=".kml,.kmz,application/vnd.google-earth.kml+xml,application/vnd.google-earth.kmz">
       <div id="kmlList" class="kml-list"></div>
 
+      <div class="seg" role="group" aria-label="Beschriftung">
+        <button class="seg-btn" type="button" id="kmlNamenBtn">Namen auf der Karte</button>
+      </div>
+
       <p class="fine">Jede Datei bleibt in der Liste stehen und lässt sich einzeln ein- und
-      ausschalten. Ein Tipp auf ein Objekt zeigt Name, Beschreibung und Zusatzdaten; die beiden
-      Knöpfe daneben zoomen auf die Datei bzw. nehmen sie aus der Liste.</p>
+      ausschalten. Das Symbol links öffnet Farbe und Form, die beiden Knöpfe rechts zoomen auf die
+      Datei bzw. nehmen sie aus der Liste. Ein Tipp auf ein Objekt zeigt Name, Beschreibung und
+      Zusatzdaten.</p>
+      <p class="fine">Namen erscheinen ab Zoomstufe 16 und höchstens 200 auf einmal — sonst
+      verdecken sie bei großen Dateien die Karte. Die Objekte liegen über allem anderen,
+      auch über den Kilometersteinen.</p>
+      <p class="fine">Stehen in den Beschreibungen Angaben der Form <em>Code: PS2, Marker type: 3</em>,
+      werden sie als Merkmale gelesen. Dann lassen sich die Symbole <strong>automatisch</strong> danach
+      unterscheiden — eine Form je Wert, mit Legende — und dieselben Merkmale in die Beschriftung
+      aufnehmen.</p>
       <p class="fine">Die Dateien werden nur auf diesem Gerät ausgewertet und dort gespeichert —
-      nichts davon geht ins Netz. Linienfarben und -stärken der Datei werden übernommen,
-      eigene Symbolbilder und Bildüberlagerungen nicht.</p>
+      nichts davon geht ins Netz. Linienfarben und -stärken der Datei werden übernommen, solange
+      keine eigene Farbe gewählt ist; eigene Symbolbilder und Bildüberlagerungen nicht.</p>
     </section>
 
     <section class="sheet-sec">

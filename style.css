@@ -126,6 +126,24 @@ body {
 .maploc.busy { opacity: .6; }
 .maploc.busy svg .ring { stroke-dasharray: 6 5; }
 
+/* Tippen scharf stellen — sitzt über dem Standortknopf */
+.maptap {
+  position: fixed;
+  right: var(--gap);
+  bottom: calc(var(--bh) + 156px + env(safe-area-inset-bottom));
+  z-index: 450;
+  width: 42px; height: 42px;
+  display: grid; place-items: center;
+  border-radius: 50%; border: 1px solid var(--line);
+  background: var(--glass); color: var(--muted-2);
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+  cursor: pointer;
+}
+.maptap svg { width: 21px; height: 21px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; }
+.maptap.is-on { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
+.maptap.is-on svg circle { fill: currentColor; }
+
 /* ---------- schwebende Bedienung ---------- */
 
 .ui {
@@ -149,6 +167,7 @@ body {
 
 .bar-top { margin-top: calc(var(--gap) + env(safe-area-inset-top)); flex: none; }
 .bar-bottom {
+  position: relative;
   margin-top: auto;
   margin-bottom: calc(var(--gap) + env(safe-area-inset-bottom));
   padding: 12px 14px 13px;
@@ -317,6 +336,7 @@ body {
 
 .kml-list:not(:empty) { margin: 8px 0; display: flex; flex-direction: column; gap: 6px; }
 
+.kml-zeile { display: flex; flex-direction: column; gap: 6px; }
 .kml-item { display: flex; gap: 6px; }
 
 .kml-tog {
@@ -331,9 +351,70 @@ body {
   background: color-mix(in srgb, var(--accent) 11%, transparent);
 }
 
-/* Der Punkt zeigt die Farbe, in der die Datei auf der Karte liegt */
-.kml-dot { flex: none; width: 11px; height: 11px; border-radius: 50%; opacity: .3; }
-.kml-tog.is-on .kml-dot { opacity: 1; }
+/* Zeigt Farbe und Form, mit denen die Datei auf der Karte liegt — und öffnet die Wahl */
+.kml-dot {
+  flex: none; width: 38px;
+  display: grid; place-items: center;
+  border: 1px solid var(--line); border-radius: 11px;
+  background: var(--panel-2); cursor: pointer;
+}
+.kml-dot:active { filter: brightness(1.15); }
+
+.kml-edit {
+  display: flex; flex-direction: column; gap: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--line); border-radius: 11px;
+  background: var(--panel-2);
+}
+.kml-wahl { display: flex; gap: 6px; flex-wrap: wrap; }
+.kml-farbe {
+  width: 30px; height: 30px; border-radius: 50%;
+  border: 2px solid transparent; cursor: pointer;
+}
+.kml-farbe.is-on { border-color: var(--text); }
+.kml-form {
+  width: 34px; height: 30px;
+  display: grid; place-items: center;
+  border: 1px solid var(--line); border-radius: 9px;
+  background: var(--glass); color: var(--muted); cursor: pointer;
+}
+.kml-form.is-on, .kml-feld.is-on {
+  border-color: var(--accent); color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.kml-auto { width: auto; padding: 0 10px; font: inherit; font-size: .76rem; font-weight: 600; }
+
+/* Merkmalsknoepfe: welches Feld unterscheidet, was in der Beschriftung steht */
+.kml-feld {
+  padding: 6px 10px;
+  border: 1px solid var(--line); border-radius: 9px;
+  background: var(--glass); color: var(--muted);
+  font: inherit; font-size: .76rem; cursor: pointer;
+}
+.kml-feld small { color: var(--muted-2); font-size: .68rem; }
+
+.kml-lab {
+  margin: 2px 0 0;
+  font-size: .64rem; font-weight: 600; letter-spacing: .5px; text-transform: uppercase;
+  color: var(--muted-2);
+}
+
+/* Legende: welcher Merkmalswert traegt welche Form */
+.kml-legende { display: flex; flex-wrap: wrap; gap: 4px 10px; }
+.kml-legende span {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: .74rem; color: var(--muted); font-variant-numeric: tabular-nums;
+}
+
+/* Name neben dem Symbol auf der Karte — wie die Kilometerbeschriftung */
+.kml-lbl {
+  display: block;
+  font-size: .66rem; font-weight: 600; line-height: 1;
+  color: var(--text);
+  text-shadow: 0 0 3px var(--bg), 0 0 3px var(--bg), 0 0 5px var(--bg);
+  white-space: nowrap;
+  pointer-events: none;
+}
 
 .kml-txt { min-width: 0; }
 .kml-nm, .kml-txt small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -373,7 +454,18 @@ body {
 
 /* ---------- untere Leiste ---------- */
 
-.bb-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+/* Wegdrücken, vor allem nach einem versehentlichen Tipp auf die Karte */
+.bb-close {
+  position: absolute; top: 5px; right: 6px;
+  width: 32px; height: 32px;
+  display: grid; place-items: center;
+  border: none; border-radius: 50%;
+  background: none; color: var(--muted-2); cursor: pointer;
+}
+.bb-close svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2.1; stroke-linecap: round; }
+.bb-close:active { color: var(--text); }
+
+.bb-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; padding-right: 30px; }
 .bb-title { font-size: 1.02rem; font-weight: 650; margin: 0; }
 .bb-sub { font-size: .76rem; color: var(--muted); margin: 2px 0 0; }
 

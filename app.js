@@ -620,11 +620,11 @@ function initMap() {
     bearing: 0
   }).setView([51.1, 10.3], 6);
 
-  /* Eigene Ebene für KML-Dateien: über den Kacheln, aber unter den
-   * Kilometersteinen und dem gesuchten Punkt — die App soll ihre eigenen
-   * Marken nicht hinter einer geladenen Datei verstecken. */
+  /* Eigene Ebene für KML-Dateien, und zwar über allem anderen: Wer eine eigene
+   * Datei mitbringt, will sie sehen und nicht unter den Kilometersteinen suchen.
+   * 620 liegt über dem Marker-Pane (600), aber unter Sprechblasen (700). */
   map.createPane('kmlPane');
-  map.getPane('kmlPane').style.zIndex = 350;
+  map.getPane('kmlPane').style.zIndex = 620;
 
   baseOsm = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
     maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
@@ -866,6 +866,117 @@ const KML_DB = 'railnav-kml';
 const KML_FARBEN = ['#e6484b', '#f59e0b', '#22c55e', '#4b93e6', '#a855f7', '#14b8a6', '#ec4899', '#84cc16'];
 const KML_VIEL = 4000;        // ab so vielen Objekten wird vor Trägheit gewarnt
 
+/* Namen an die Punkte schreiben lohnt erst, wenn nicht alles übereinanderliegt,
+ * und muss nach oben begrenzt sein — 1000 Beschriftungen sind auf einem Handy
+ * nur noch ein grauer Teppich. */
+const KML_LABEL_ZOOM = 16;
+const KML_LABEL_MAX = 200;
+
+/* Auswählbare Symbole. Zehn Formen, weil eine Datei durchaus zehn Merkmalswerte
+ * mitbringt — die FP-Ausgabe eines Vermessungsprogramms hat neun Marker-Typen.
+ * Der einheitliche Kreis läuft über L.circleMarker, weil das auch bei einigen
+ * tausend Punkten flüssig bleibt; alle anderen Formen sind SVG in einem divIcon. */
+const KML_FORMEN = {
+  kreis:     { name: 'Kreis',            d: '<circle cx="8" cy="8" r="5"/>' },
+  quadrat:   { name: 'Quadrat',          d: '<rect x="3" y="3" width="10" height="10"/>' },
+  dreieck:   { name: 'Dreieck',          d: '<path d="M8 2.4 14 13.4H2z"/>' },
+  dreieckAb: { name: 'Dreieck abwärts',  d: '<path d="M8 13.6 2 2.6h12z"/>' },
+  raute:     { name: 'Raute',            d: '<path d="M8 2 14 8 8 14 2 8z"/>' },
+  sechseck:  { name: 'Sechseck',         d: '<path d="M8 1.8 13.4 5v6L8 14.2 2.6 11V5z"/>' },
+  stern:     { name: 'Stern',            d: '<path d="M8 1.6 9.9 6 14.6 6.4 11 9.5 12.1 14.1 8 11.6 3.9 14.1 5 9.5 1.4 6.4 6.1 6z"/>' },
+  kreuz:     { name: 'Kreuz',            d: '<path d="M3.6 3.6 12.4 12.4M12.4 3.6 3.6 12.4"/>', strich: true },
+  plus:      { name: 'Plus',             d: '<path d="M8 2.6V13.4M2.6 8H13.4"/>', strich: true },
+  ring:      { name: 'Ring',             d: '<circle cx="8" cy="8" r="4.6"/>', strich: true }
+};
+
+function kmlSymbolSvg(form, farbe, gross) {
+  const r = gross ? 16 : 14;
+  // Steht die Form nicht fest, zwei verschiedene andeuten statt eine vorzutäuschen
+  if (form === 'auto') {
+    return `<svg viewBox="0 0 16 16" width="${r}" height="${r}" aria-hidden="true">` +
+      `<g fill="${farbe}" stroke="#fff" stroke-width="1.6" paint-order="stroke">` +
+      `<circle cx="5" cy="5" r="3.4"/><rect x="7.8" y="7.8" width="6.6" height="6.6"/></g></svg>`;
+  }
+  const f = KML_FORMEN[form] || KML_FORMEN.kreis;
+  /* Weiß außen herum, damit die Form auf Luftbild und Bahnplan gleich gut sitzt.
+   * Strichformen brauchen dafür zwei Durchgänge — bei ihnen ist die Farbe der
+   * Strich und nicht die Füllung. */
+  const koerper = f.strich
+    ? `<g fill="none" stroke-linecap="round"><g stroke="#fff" stroke-width="4.4">${f.d}</g>` +
+      `<g stroke="${farbe}" stroke-width="2.4">${f.d}</g></g>`
+    : `<g fill="${farbe}" stroke="#fff" stroke-width="2" paint-order="stroke">${f.d}</g>`;
+  return `<svg viewBox="0 0 16 16" width="${r}" height="${r}" aria-hidden="true">${koerper}</svg>`;
+}
+
+/* -------- Merkmale der Objekte -------- */
+
+/** Wert eines Merkmals, etwa "Marker type" → "3". */
+function kmlWert(o, feld) {
+  for (const [k, v] of (o.daten || [])) if (k === feld) return v;
+  return null;
+}
+
+/** Welche Merkmale tragen die Objekte dieser Datei, und wie viele Werte je Merkmal? */
+function kmlFelder(akte) {
+  const gefunden = new Map();
+  for (const o of akte.objekte) {
+    for (const [k] of (o.daten || [])) {
+      if (!gefunden.has(k)) gefunden.set(k, new Set());
+    }
+  }
+  for (const o of akte.objekte) {
+    for (const [k, v] of (o.daten || [])) {
+      const menge = gefunden.get(k);
+      if (menge.size < 60) menge.add(v);
+    }
+  }
+  return [...gefunden].map(([key, m]) => ({ key, werte: m.size }));
+}
+
+/* Welches Merkmal taugt zum Unterscheiden? Es braucht mindestens zwei und
+ * höchstens so viele Werte, wie es Formen gibt. Namen wie "Marker type" oder
+ * "Code" gehen vor, sonst das Merkmal mit den wenigsten Werten. */
+function kmlAutoFeld(akte) {
+  const formen = Object.keys(KML_FORMEN).length;
+  const kandidaten = kmlFelder(akte).filter(f => f.werte >= 2 && f.werte <= formen);
+  if (!kandidaten.length) return null;
+  const rang = f => /marker/i.test(f.key) ? 0
+    : /typ|type/i.test(f.key) ? 1
+    : /code|art|kategor|symbol|klasse/i.test(f.key) ? 2 : 3;
+  kandidaten.sort((a, b) => rang(a) - rang(b) || a.werte - b.werte || a.key.localeCompare(b.key));
+  return kandidaten[0].key;
+}
+
+/** Merkmalswert → Form. Zahlen numerisch sortiert, damit 2 vor 14 kommt. */
+function kmlFormKarte(akte) {
+  const feld = akte.autoFeld;
+  if (!feld) return null;
+  const werte = new Set();
+  for (const o of akte.objekte) {
+    const v = kmlWert(o, feld);
+    if (v != null && v !== '') werte.add(v);
+  }
+  const formen = Object.keys(KML_FORMEN);
+  const sortiert = [...werte].sort((a, b) => {
+    const za = parseFloat(a), zb = parseFloat(b);
+    if (isFinite(za) && isFinite(zb) && za !== zb) return za - zb;
+    return String(a).localeCompare(String(b), 'de');
+  });
+  const karte = new Map();
+  sortiert.forEach((v, i) => karte.set(v, formen[i % formen.length]));
+  return karte;
+}
+
+/** Was auf der Karte neben dem Symbol steht. */
+function kmlLabelText(akte, o) {
+  const teile = [];
+  for (const f of (akte.labelFelder || ['name'])) {
+    const v = f === 'name' ? o.name : kmlWert(o, f);
+    if (v) teile.push(v);
+  }
+  return teile.join(' · ');
+}
+
 let kmlAkten = [];                    // Kopfdaten samt Geometrie, in Ladereihenfolge
 const kmlEbenen = new Map();          // id → Leaflet-Gruppe der sichtbaren Datei
 
@@ -1041,11 +1152,38 @@ function kmlGeo(el, raus) {
 /* Beschreibungen enthalten oft ganze HTML-Tabellen. Übernommen wird nur der
  * Text — über DOMParser, damit nichts davon ausgeführt oder nachgeladen wird. */
 function kmlKlartext(roh) {
-  const t = String(roh || '').trim();
+  let t = String(roh || '').trim();
+  // Manche Ausgabeprogramme schreiben die CDATA-Klammer selbst noch escaped in
+  // den Text hinein; als HTML gelesen verschluckt sie sonst die erste Zeile.
+  t = t.replace(/^<!\[CDATA\[/, '').replace(/\]\]>\s*$/, '').trim();
   if (!t) return '';
   if (!/[<&]/.test(t)) return t;
   const d = new DOMParser().parseFromString(t, 'text/html');
   return (d.body.textContent || '').replace(/[ \t]+/g, ' ').replace(/\n\s*\n+/g, '\n').trim();
+}
+
+/* Viele Ausgabeprogramme schreiben ihre Merkmale als Text in die Beschreibung,
+ * etwa "Code: PS2, Marker type: 0". Solche Zeilen werden zu Merkmalen, damit man
+ * danach Symbole und Beschriftung wählen kann. Bewusst streng: Nur wenn eine
+ * Zeile vollständig aus "Schlüssel: Wert"-Stücken besteht, wird sie zerlegt —
+ * sonst bliebe von einem Fließtext ein Trümmerfeld übrig. */
+function kmlPaareAusText(text) {
+  const paare = [], rest = [];
+  for (const zeile of String(text || '').split('\n')) {
+    if (!zeile.trim()) continue;
+    // Am Komma nur trennen, wenn danach wieder ein Schlüssel mit Doppelpunkt folgt
+    const stuecke = zeile.split(/,\s+(?=[^,:]{1,30}:\s)/);
+    const gefunden = [];
+    let vollstaendig = true;
+    for (const st of stuecke) {
+      const m = /^\s*([^:]{1,30}?)\s*:\s*(\S.*)$/.exec(st);
+      if (m) gefunden.push([m[1].trim(), m[2].trim()]);
+      else { vollstaendig = false; break; }
+    }
+    if (vollstaendig && gefunden.length) paare.push(...gefunden);
+    else rest.push(zeile);
+  }
+  return { paare, rest: rest.join('\n').trim() };
 }
 
 function kmlDaten(pm) {
@@ -1117,10 +1255,14 @@ function kmlParse(xmlText) {
 
     const eigen = kmlKind(pm, 'Style');
     const nEl = kmlKind(pm, 'name'), dEl = kmlKind(pm, 'description');
+    const beschreibung = dEl ? kmlKlartext(dEl.textContent) : '';
+    const zerlegt = kmlPaareAusText(beschreibung);
+    // "none" schreiben manche Programme als Platzhalter fuer "keine Beschreibung"
+    if (/^(none|n\/a|-{1,3})$/i.test(zerlegt.rest)) zerlegt.rest = '';
     const gemeinsam = {
       name: nEl ? nEl.textContent.trim() : '',
-      text: dEl ? kmlKlartext(dEl.textContent).slice(0, 700) : '',
-      daten: kmlDaten(pm),
+      text: zerlegt.rest.slice(0, 700),
+      daten: [...kmlDaten(pm), ...zerlegt.paare].slice(0, 20),
       ordner: kmlOrdner(pm),
       stil: eigen ? kmlStil(eigen) : stilFuer(kmlText(pm, 'styleUrl'))
     };
@@ -1218,10 +1360,14 @@ function kmlPopup(o, akte) {
 function kmlEbene(akte) {
   const gruppe = L.featureGroup();
   const grund = akte.farbe || KML_FARBEN[0];
+  const form = akte.symbol || 'kreis';
+  const autoKarte = form === 'auto' ? kmlFormKarte(akte) : null;
 
   for (const o of akte.objekte) {
     const s = o.stil || {};
-    const farbe = s.color || grund;
+    // Selbst gewählte Farbe schlägt die Angabe in der Datei — sonst hätte das
+    // Auswählen bei Dateien mit eigenem Stil keine Wirkung
+    const farbe = akte.farbeFest ? grund : (s.color || grund);
     const basis = {
       pane: 'kmlPane',
       color: farbe,
@@ -1233,10 +1379,18 @@ function kmlEbene(akte) {
 
     let l;
     if (o.art === 'p') {
-      l = L.circleMarker(o.koord, {
-        ...basis, radius: 5, weight: 2, color: '#fff',
-        fillColor: s.punkt || farbe, fillOpacity: 1
-      });
+      const punktFarbe = akte.farbeFest ? grund : (s.punkt || farbe);
+      const punktForm = autoKarte ? (autoKarte.get(kmlWert(o, akte.autoFeld)) || 'kreis') : form;
+      l = punktForm === 'kreis' && !autoKarte
+        ? L.circleMarker(o.koord, {
+            ...basis, radius: 5, weight: 2, color: '#fff',
+            fillColor: punktFarbe, fillOpacity: 1
+          })
+        : L.marker(o.koord, {
+            pane: 'kmlPane', bubblingMouseEvents: false,
+            icon: L.divIcon({ className: '', iconSize: [14, 14], iconAnchor: [7, 7],
+              html: kmlSymbolSvg(punktForm, punktFarbe) })
+          });
     } else if (o.art === 'l') {
       l = L.polyline(o.koord, basis);
     } else {
@@ -1260,6 +1414,42 @@ function kmlEbene(akte) {
   return gruppe;
 }
 
+/** Wo die Beschriftung eines Objekts hängt. */
+function kmlAnker(o) {
+  if (o.art === 'p') return o.koord;
+  if (o.art === 'l') return o.koord[Math.floor(o.koord.length / 2)];
+  const ring = o.koord[0];
+  return ring && ring[Math.floor(ring.length / 2)];
+}
+
+let kmlLabelLayer = null;
+
+/* Namen erst ab KML_LABEL_ZOOM und nur, was im Bild liegt — sonst hängen bei
+ * einer Datei mit tausend Punkten tausend Textknoten in der Karte. */
+function kmlLabels() {
+  if (!kmlLabelLayer) return;
+  kmlLabelLayer.clearLayers();
+  if (prefs.kmlNamen === false || map.getZoom() < KML_LABEL_ZOOM) return;
+
+  const bild = map.getBounds().pad(0.08);
+  let n = 0;
+  for (const a of kmlAkten) {
+    if (!a.sichtbar) continue;
+    for (const o of a.objekte) {
+      const txt = kmlLabelText(a, o);
+      if (!txt) continue;
+      const wo = kmlAnker(o);
+      if (!wo || !bild.contains(wo)) continue;
+      if (++n > KML_LABEL_MAX) return;      // Rest weglassen, statt alles zuzukleistern
+      L.marker(wo, {
+        pane: 'kmlPane', interactive: false, keyboard: false,
+        icon: L.divIcon({ className: '', iconSize: null, iconAnchor: [-8, 7],
+          html: `<span class="kml-lbl">${esc(txt)}</span>` })
+      }).addTo(kmlLabelLayer);
+    }
+  }
+}
+
 function kmlZeigen(akte, sichtbar) {
   const alt = kmlEbenen.get(akte.id);
   if (alt) { map.removeLayer(alt); kmlEbenen.delete(akte.id); }
@@ -1268,6 +1458,7 @@ function kmlZeigen(akte, sichtbar) {
   const ebene = kmlEbene(akte);
   ebene.addTo(map);
   kmlEbenen.set(akte.id, ebene);
+  kmlLabels();
 }
 
 /* -------- Liste im Menü -------- */
@@ -1286,26 +1477,106 @@ function kmlListe() {
   box.innerHTML = kmlAkten.map((a, i) => {
     const unter = [nfM.format(a.anzahl || a.objekte.length) + ' Objekte', kmlGroesse(a.groesse), a.titel]
       .filter(Boolean).join(' · ');
-    return `<div class="kml-item">
-      <button class="kml-tog${a.sichtbar ? ' is-on' : ''}" type="button" data-ktog="${i}"
-              aria-pressed="${a.sichtbar ? 'true' : 'false'}">
-        <span class="kml-dot" style="background:${esc(a.farbe)}"></span>
-        <span class="kml-txt"><span class="kml-nm">${esc(a.name)}</span><small>${esc(unter)}</small></span>
-      </button>
-      <button class="kml-ic" type="button" data-kzoom="${i}" aria-label="Auf ${esc(a.name)} zoomen">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4H4v5M15 4h5v5M15 20h5v-5M9 20H4v-5"/></svg>
-      </button>
-      <button class="kml-ic del" type="button" data-kdel="${i}" aria-label="${esc(a.name)} entfernen">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
-      </button>
+    const form = a.symbol || 'kreis';
+    const felder = kmlFelder(a);
+    const autoMoeglich = kmlAutoFeld(a) != null;
+    const autoKarte = form === 'auto' ? kmlFormKarte(a) : null;
+    const labelFelder = a.labelFelder || ['name'];
+    const zeigeSymbol = form === 'auto' ? (a.autoFeld ? 'auto' : 'kreis') : form;
+    return `<div class="kml-zeile">
+      <div class="kml-item">
+        <button class="kml-dot" type="button" data-kstil="${i}" aria-label="Farbe und Symbol von ${esc(a.name)}">
+          ${kmlSymbolSvg(zeigeSymbol, esc(a.farbe), true)}
+        </button>
+        <button class="kml-tog${a.sichtbar ? ' is-on' : ''}" type="button" data-ktog="${i}"
+                aria-pressed="${a.sichtbar ? 'true' : 'false'}">
+          <span class="kml-txt"><span class="kml-nm">${esc(a.name)}</span><small>${esc(unter)}</small></span>
+        </button>
+        <button class="kml-ic" type="button" data-kzoom="${i}" aria-label="Auf ${esc(a.name)} zoomen">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4H4v5M15 4h5v5M15 20h5v-5M9 20H4v-5"/></svg>
+        </button>
+        <button class="kml-ic del" type="button" data-kdel="${i}" aria-label="${esc(a.name)} entfernen">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
+      </div>
+      <div class="kml-edit" data-kedit="${i}" hidden>
+        <p class="kml-lab">Farbe</p>
+        <div class="kml-wahl">${KML_FARBEN.map(c =>
+          `<button class="kml-farbe${c === a.farbe ? ' is-on' : ''}" type="button" data-kfarbe="${i}"
+                   data-wert="${c}" style="background:${c}" aria-label="Farbe ${c}"></button>`).join('')}</div>
+
+        <p class="kml-lab">Symbol</p>
+        <div class="kml-wahl">
+          ${autoMoeglich ? `<button class="kml-form kml-auto${form === 'auto' ? ' is-on' : ''}" type="button"
+              data-kform="${i}" data-wert="auto">automatisch</button>` : ''}
+          ${Object.entries(KML_FORMEN).map(([k, f]) =>
+            `<button class="kml-form${k === form ? ' is-on' : ''}" type="button" data-kform="${i}"
+                     data-wert="${k}" aria-label="${f.name}" title="${f.name}">${kmlSymbolSvg(k, esc(a.farbe), true)}</button>`).join('')}
+        </div>
+        ${form === 'auto' ? `
+        <p class="kml-lab">Unterschieden nach</p>
+        <div class="kml-wahl">${felder.filter(f => f.werte >= 2 && f.werte <= Object.keys(KML_FORMEN).length).map(f =>
+          `<button class="kml-feld${f.key === a.autoFeld ? ' is-on' : ''}" type="button" data-kauto="${i}"
+                   data-wert="${esc(f.key)}">${esc(f.key)} <small>${f.werte}</small></button>`).join('')}</div>
+        <div class="kml-legende">${autoKarte ? [...autoKarte].map(([wert, k]) =>
+          `<span>${kmlSymbolSvg(k, esc(a.farbe), false)}${esc(wert)}</span>`).join('') : ''}</div>` : ''}
+
+        <p class="kml-lab">Beschriftung</p>
+        <div class="kml-wahl">
+          <button class="kml-feld${labelFelder.includes('name') ? ' is-on' : ''}" type="button"
+                  data-klabel="${i}" data-wert="name">Name</button>
+          ${felder.map(f => `<button class="kml-feld${labelFelder.includes(f.key) ? ' is-on' : ''}" type="button"
+                  data-klabel="${i}" data-wert="${esc(f.key)}">${esc(f.key)}</button>`).join('')}
+        </div>
+      </div>
     </div>`;
   }).join('');
+
+  box.querySelectorAll('[data-kstil]').forEach(btn => btn.addEventListener('click', () => {
+    const feld = box.querySelector(`[data-kedit="${btn.dataset.kstil}"]`);
+    if (feld) feld.hidden = !feld.hidden;
+  }));
+
+  const stilGesetzt = (i, aenderung) => {
+    const a = kmlAkten[i];
+    if (!a) return;
+    Object.assign(a, aenderung);
+    kmlKopfMerken(a);
+    if (a.sichtbar) kmlZeigen(a, true);      // mit neuem Aussehen neu aufbauen
+    kmlLabels();
+    kmlListe();
+    const feld = $('#kmlList').querySelector(`[data-kedit="${i}"]`);
+    if (feld) feld.hidden = false;           // Klappe offen lassen, man probiert meist mehrere
+  };
+
+  box.querySelectorAll('[data-kfarbe]').forEach(btn => btn.addEventListener('click', () =>
+    stilGesetzt(Number(btn.dataset.kfarbe), { farbe: btn.dataset.wert, farbeFest: true })));
+  box.querySelectorAll('[data-kform]').forEach(btn => btn.addEventListener('click', () => {
+    const i = Number(btn.dataset.kform), a = kmlAkten[i];
+    const wahl = btn.dataset.wert;
+    // Beim Umschalten auf automatisch ein Merkmal vorschlagen, falls noch keins steht
+    stilGesetzt(i, wahl === 'auto' && a && !a.autoFeld
+      ? { symbol: 'auto', autoFeld: kmlAutoFeld(a) }
+      : { symbol: wahl });
+  }));
+
+  box.querySelectorAll('[data-kauto]').forEach(btn => btn.addEventListener('click', () =>
+    stilGesetzt(Number(btn.dataset.kauto), { autoFeld: btn.dataset.wert })));
+
+  box.querySelectorAll('[data-klabel]').forEach(btn => btn.addEventListener('click', () => {
+    const i = Number(btn.dataset.klabel), a = kmlAkten[i];
+    if (!a) return;
+    const wahl = btn.dataset.wert;
+    const jetzt = a.labelFelder || ['name'];
+    stilGesetzt(i, { labelFelder: jetzt.includes(wahl) ? jetzt.filter(x => x !== wahl) : [...jetzt, wahl] });
+  }));
 
   box.querySelectorAll('[data-ktog]').forEach(btn => btn.addEventListener('click', () => {
     const a = kmlAkten[Number(btn.dataset.ktog)];
     if (!a) return;
     kmlZeigen(a, !a.sichtbar);
     kmlKopfMerken(a);
+    kmlLabels();
     kmlListe();
   }));
 
@@ -1324,6 +1595,7 @@ function kmlListe() {
     if (!confirm(a.name + ' aus der Liste entfernen? Die Datei auf dem Gerät bleibt erhalten.')) return;
     kmlZeigen(a, false);
     kmlAkten = kmlAkten.filter(x => x.id !== a.id);
+    kmlLabels();
     kmlListe();
     try { await kmlLoeschen(a.id); } catch { /* sonst ist sie nach dem Neuladen wieder da */ }
   }));
@@ -1342,9 +1614,16 @@ async function kmlOeffnen(dateien) {
       const geparst = kmlParse(roh);
       if (!geparst.objekte.length) { toast(datei.name + ': keine Geometrie gefunden.'); continue; }
 
+      const vorlaeufig = { objekte: geparst.objekte };
+      const autoFeld = kmlAutoFeld(vorlaeufig);
       const akte = {
         id: 'k' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
         name: datei.name.replace(/\.(kml|kmz)$/i, '') || 'KML',
+        /* Trägt die Datei ein Merkmal, das nach Typ aussieht, werden die Formen
+         * gleich danach unterschieden — genau dafür steht es ja drin. */
+        symbol: autoFeld ? 'auto' : 'kreis',
+        autoFeld,
+        labelFelder: ['name'],
         titel: geparst.titel && geparst.titel !== datei.name ? geparst.titel : '',
         farbe: KML_FARBEN[kmlAkten.length % KML_FARBEN.length],
         groesse: datei.size,
@@ -1368,6 +1647,7 @@ async function kmlOeffnen(dateien) {
   }
 
   kmlListe();
+  kmlLabels();
   if (!letzte) return;
 
   if (letzte.grenzen) map.fitBounds(letzte.grenzen, { padding: [30, 30], maxZoom: 17 });
@@ -1378,9 +1658,12 @@ async function kmlOeffnen(dateien) {
 }
 
 async function kmlBoot() {
+  kmlLabelLayer = L.layerGroup().addTo(map);
+  map.on('moveend', kmlLabels);
   try { kmlAkten = await kmlLaden(); }
   catch { return; }        // privater Modus oder gesperrter Speicher
   for (const a of kmlAkten) if (a.sichtbar) kmlZeigen(a, true);
+  kmlLabels();
   kmlListe();
 }
 
@@ -1467,8 +1750,13 @@ function toleranceMeters(latlng) {
   return Math.max(map.distance(latlng, b), 25);
 }
 
+/** Liest ein Tipp auf die Karte den Kilometer, oder ist das abgeschaltet? */
+const tippAn = () => prefs.tap !== false;
+
 async function onMapClick(ev) {
-  if (view.busy) return;
+  // Abgeschaltet, damit ein versehentlicher Tipp nicht die Anzeige umwirft.
+  // Kilometersteine bleiben antippbar — die trifft man nicht zufällig.
+  if (!tippAn() || view.busy) return;
   const { lat, lng } = ev.latlng;
   closeSuggest();
 
@@ -1778,6 +2066,9 @@ function renderBottom() {
       <summary>Herkunft &amp; Genauigkeit</summary>
       <p class="bb-note plain">${esc(sub)}${detail ? ' · ' + esc(detail) : ''}</p>
     </details>
+    <button type="button" id="bbClose" class="bb-close" aria-label="Anzeige schließen">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+    </button>
     <div class="bb-actions">
       <a class="maps" href="${gmapsUrl(p.lat, p.lon)}" target="_blank" rel="noopener">In Google Maps öffnen</a>
       <a href="${gmapsRoute(p.lat, p.lon)}" target="_blank" rel="noopener">Route</a>
@@ -1791,6 +2082,9 @@ function renderBottom() {
 
 /** Ereignisse der unteren Leiste — separat, weil die Leiste neu gezeichnet wird. */
 function bindBottom() {
+  const zu = $('#bbClose');
+  if (zu) zu.addEventListener('click', closeBottom);
+
   const copy = $('#copyBtn');
   if (copy) copy.addEventListener('click', async () => {
     const p = view.point;
@@ -1818,7 +2112,22 @@ function showStatus(msg) {
 function showError(msg) {
   const b = $('#bottom');
   b.hidden = false;
-  b.innerHTML = `<p class="bb-err">${esc(msg)}</p>`;
+  b.innerHTML = `<button type="button" id="bbClose" class="bb-close" aria-label="Anzeige schließen">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+    </button>
+    <p class="bb-err">${esc(msg)}</p>`;
+  bindBottom();
+  updateBH();
+}
+
+/** Anzeige wegdrücken — vor allem für den versehentlichen Tipp auf die Karte. */
+function closeBottom() {
+  view.point = null;
+  pointMarker = null;
+  if (pointLayer) pointLayer.clearLayers();
+  if (trackLayer) trackLayer.clearLayers();
+  $('#bottom').hidden = true;
+  $('#bottom').innerHTML = '';
   updateBH();
 }
 
@@ -2011,6 +2320,14 @@ function syncButtons() {
   const orm = $('#ormBtn');
   if (orm && map) orm.classList.toggle('is-on', map.hasLayer(ormLayer));
 
+  const tb = $('#mapTapBtn');
+  if (tb) {
+    tb.classList.toggle('is-on', tippAn());
+    tb.setAttribute('aria-pressed', tippAn() ? 'true' : 'false');
+  }
+  const kn = $('#kmlNamenBtn');
+  if (kn) kn.classList.toggle('is-on', prefs.kmlNamen !== false);
+
   const wt = $('#wmsToggle');
   if (wt) {
     wt.classList.toggle('is-on', !!(prefs.wms && prefs.wms.on));
@@ -2093,6 +2410,25 @@ function bind() {
   });
 
   on('#mapLocBtn', 'click', locate);
+
+  on('#mapTapBtn', 'click', () => {
+    prefs.tap = !tippAn();
+    saveStore();
+    syncButtons();
+    toast(tippAn()
+      ? 'Ein Tipp auf die Karte liest jetzt den Kilometer.'
+      : 'Tippen auf die Karte ist aus — dieser Knopf schaltet es wieder ein.');
+  });
+
+  on('#kmlNamenBtn', 'click', () => {
+    prefs.kmlNamen = prefs.kmlNamen === false;
+    saveStore();
+    syncButtons();
+    kmlLabels();
+    if (prefs.kmlNamen !== false && map.getZoom() < KML_LABEL_ZOOM) {
+      toast('Namen erscheinen ab Zoomstufe ' + KML_LABEL_ZOOM + ' — noch etwas näher heran.');
+    }
+  });
 
   // KML: Auswahl über den Knopf, am Rechner geht auch Hineinziehen
   on('#kmlAdd', 'click', () => { const f = $('#kmlFile'); if (f) f.click(); });
