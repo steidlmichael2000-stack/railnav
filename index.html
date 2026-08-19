@@ -23,9 +23,12 @@
      Die ganze Scheibe dreht mit, das N also auch — wie bei einem Kompass. -->
 <button id="northBtn" class="north" type="button" hidden aria-label="Karte nach Norden ausrichten">
   <svg viewBox="0 0 32 32" aria-hidden="true">
-    <text x="16" y="6.8" text-anchor="middle">N</text>
-    <path class="nord" d="M16 8.6 19.7 16 12.3 16z"/>
-    <path class="sued" d="M16 25.8 19.7 16 12.3 16z"/>
+    <!-- Farben stehen auch als Attribut da: Kommt bei einem halb erneuerten Cache
+         neues HTML mit altem CSS zusammen, bliebe die Nadel sonst schwarz auf
+         dunklem Knopf und damit unsichtbar. Das CSS gewinnt trotzdem. -->
+    <text x="16" y="6.8" text-anchor="middle" fill="#97a2b0">N</text>
+    <path class="nord" fill="#ef4444" d="M16 8.6 19.7 16 12.3 16z"/>
+    <path class="sued" fill="#74808e" d="M16 25.8 19.7 16 12.3 16z"/>
   </svg>
 </button>
 
