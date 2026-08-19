@@ -693,7 +693,8 @@ function initMap() {
   pointLayer = L.layerGroup().addTo(map);
   meLayer = L.layerGroup().addTo(map);
 
-  L.control.zoom({ position: 'bottomright' }).addTo(map);
+  /* Keine Zoomknöpfe: Am Rechner zoomt das Mausrad, am Gerät zwei Finger oder
+   * ein Doppeltipp. Der Platz rechts unten gehört damit den eigenen Knöpfen. */
   L.control.scale({ imperial: false, position: 'bottomleft' }).addTo(map);
 
   overlayLayers = { orm: ormLayer, parz: parzLayer };
@@ -1497,16 +1498,37 @@ function kmlEbene(akte) {
       });
     }
 
-    const html = kmlPopup(o, akte);
-    if (html) {
-      l.bindPopup(html, {
+    /* Sprechblase erst beim Tippen bauen: Das spart bei einer Datei mit tausend
+     * Objekten tausend vorgefertigte Textbausteine, und vor allem lässt sich so
+     * entscheiden, was ein Tipp bedeutet. Beim Messen ist ein KML-Objekt ein
+     * Fangpunkt und keine Auskunft. */
+    l.on('click', ev => {
+      L.DomEvent.stopPropagation(ev);
+      if (messModus) { messTipp(L.latLng(kmlNaechsterKnoten(o, ev.latlng))); return; }
+      const html = kmlPopup(o, akte);
+      if (!html) return;
+      L.popup({
         className: 'kml-pop', maxWidth: 300,
         autoPanPaddingTopLeft: L.point(14, 86), autoPanPaddingBottomRight: L.point(14, 24)
-      });
-    }
+      }).setLatLng(o.art === 'p' ? o.koord : ev.latlng).setContent(html).openOn(map);
+    });
     l.addTo(gruppe);
   }
   return gruppe;
+}
+
+/** Nächster Stützpunkt eines Objekts zu einem Tipp — beim Messen wird darauf gefangen. */
+function kmlNaechsterKnoten(o, latlng) {
+  if (o.art === 'p') return o.koord;
+  const ringe = o.art === 'a' ? o.koord : [o.koord];
+  let best = null, beste = Infinity;
+  for (const ring of ringe) {
+    for (const k of ring) {
+      const d = haversine(latlng.lat, latlng.lng, k[0], k[1]);
+      if (d < beste) { beste = d; best = k; }
+    }
+  }
+  return best;
 }
 
 /** Wo die Beschriftung eines Objekts hängt. */
@@ -1970,12 +1992,13 @@ function messLeiste() {
 function messStart() {
   messModus = true;
   messPunkte = [];
+  map.closePopup();          // eine offene KML-Auskunft stört beim Messen
   if (!messLayer) messLayer = L.layerGroup().addTo(map);
   messZeichnen();
   messLeiste();
   closeSheet();
   syncButtons();
-  toast('Messen: auf die Karte tippen. Der Kilometer wird dabei nicht abgelesen.');
+  toast('Messen: auf die Karte tippen. Kilometersteine und KML-Punkte werden gefangen.');
 }
 
 function messEnde() {

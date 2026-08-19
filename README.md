@@ -43,9 +43,14 @@ Karte schaltet das Ablesen durch Tippen ganz ab — dann wirft ein versehentlich
 nicht mehr um. Kilometersteine bleiben antippbar, die trifft man nicht zufällig.
 
 Der Knopf mit dem Lineal darüber schaltet das **Messen** ein. Solange es läuft, setzt jeder Tipp
-einen Messpunkt statt einen Kilometer abzulesen, und ein Kilometerstein ist ein bequemer Fangpunkt.
-Gerechnet wird ohne Netzabfrage im Browser; die Länge entlang des Gleises bleibt der Feinrechnung
-in der Richtung km → Position vorbehalten.
+einen Messpunkt statt einen Kilometer abzulesen. **Kilometersteine und Objekte aus geladenen
+KML-Dateien werden dabei gefangen** — bei einem KML-Punkt auf seine genaue Koordinate, bei einer
+Linie oder Fläche auf den nächstgelegenen Stützpunkt; die Sprechblase mit den Merkmalen bleibt
+solange weg. Gerechnet wird ohne Netzabfrage im Browser; die Länge entlang des Gleises bleibt der
+Feinrechnung in der Richtung km → Position vorbehalten.
+
+**Zoomknöpfe gibt es nicht** — am Rechner zoomt das Mausrad, am Gerät zwei Finger oder ein
+Doppeltipp. Der Platz rechts unten gehört den drei eigenen Knöpfen: Messen, Ablesen, Standort.
 
 ## Wie genau ist das?
 

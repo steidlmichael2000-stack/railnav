@@ -90,8 +90,6 @@ body {
 /* Zoom, Maßstab und Attribution über der unteren Leiste halten */
 .leaflet-bottom { bottom: calc(var(--bh) + env(safe-area-inset-bottom)); }
 .leaflet-control-attribution { font-size: .62rem; opacity: .85; }
-.leaflet-bar a, .leaflet-bar a:hover { background: var(--glass); color: var(--text); border-bottom-color: var(--line); }
-.leaflet-touch .leaflet-bar a { width: 34px; height: 34px; line-height: 34px; }
 
 /* Nordknopf — sitzt frei über der Karte, links über der unteren Leiste */
 .north {
@@ -113,9 +111,9 @@ body {
 /* Standortknopf — rechts, über den Zoomknöpfen */
 .maploc {
   position: fixed;
-  /* bündig über den Zoomknöpfen: deren Steuerung ist 72 px hoch plus Rand */
+  /* Knopfsäule rechts unten, gerade über der Attributionszeile */
   right: var(--gap);
-  bottom: calc(var(--bh) + 108px + env(safe-area-inset-bottom));
+  bottom: calc(var(--bh) + 34px + env(safe-area-inset-bottom));
   z-index: 450;
   width: 42px; height: 42px;
   display: grid; place-items: center;
@@ -135,7 +133,7 @@ body {
 .mapmess {
   position: fixed;
   right: var(--gap);
-  bottom: calc(var(--bh) + 204px + env(safe-area-inset-bottom));
+  bottom: calc(var(--bh) + 130px + env(safe-area-inset-bottom));
   z-index: 450;
   width: 42px; height: 42px;
   display: grid; place-items: center;
@@ -152,7 +150,7 @@ body {
 .maptap {
   position: fixed;
   right: var(--gap);
-  bottom: calc(var(--bh) + 156px + env(safe-area-inset-bottom));
+  bottom: calc(var(--bh) + 82px + env(safe-area-inset-bottom));
   z-index: 450;
   width: 42px; height: 42px;
   display: grid; place-items: center;
