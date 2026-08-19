@@ -19,10 +19,14 @@
 
 <div id="map" role="application" aria-label="Karte mit Kilometersteinen der Strecke"></div>
 
-<!-- Erscheint nur, wenn die Karte gedreht ist: zurück auf Nordausrichtung -->
+<!-- Erscheint nur, wenn die Karte gedreht ist: zurück auf Nordausrichtung.
+     Die ganze Scheibe dreht mit, das N also auch — wie bei einem Kompass. -->
 <button id="northBtn" class="north" type="button" hidden aria-label="Karte nach Norden ausrichten">
-  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.6l4.4 16L12 15.2 7.6 18.6z"/></svg>
-  <span>N</span>
+  <svg viewBox="0 0 32 32" aria-hidden="true">
+    <text x="16" y="6.8" text-anchor="middle">N</text>
+    <path class="nord" d="M16 8.6 19.7 16 12.3 16z"/>
+    <path class="sued" d="M16 25.8 19.7 16 12.3 16z"/>
+  </svg>
 </button>
 
 <!-- Messen: Luftlinie zwischen angetippten Punkten -->

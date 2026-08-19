@@ -32,7 +32,8 @@ am Rechner und lässt sich als App auf den Startbildschirm legen.
 - **Hintergrund verblassen** — Karte oder Luftbild stufenlos bis auf null, dann bleibt nur der
   Bahn- bzw. WMS-Layer stehen; darunter liegt Weiß, damit schwarze Strichzeichnungen auch im
   Dunkelmodus lesbar bleiben.
-- **Karte drehen** mit zwei Fingern; ein Nordknopf erscheint, sobald sie verdreht ist.
+- **Karte drehen** mit zwei Fingern; sobald sie verdreht ist, erscheint links unten ein Kompass,
+  dessen Nadel samt N mitdreht und nach Norden zeigt — ein Tipp darauf stellt die Karte gerade.
 - **Offlinefähig** — die App selbst und bereits geladene Kartenkacheln bleiben ohne Netz nutzbar.
 
 Eingabe: `12,5` oder `12.5`, auch Hektometer-Schreibweise `14+250` (= km 14,250).

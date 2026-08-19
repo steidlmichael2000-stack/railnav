@@ -717,8 +717,13 @@ function syncNorth() {
   if (!btn || !map.getBearing) return;
   const b = map.getBearing() || 0;
   btn.hidden = Math.abs(((b % 360) + 360) % 360) < 0.5;
-  const pfeil = btn.querySelector('svg');
-  if (pfeil) pfeil.style.transform = `rotate(${-b}deg)`;
+
+  /* Ohne Vorzeichen: Bei einer Kartendrehung von b Grad liegt Norden auf dem
+   * Bildschirm ebenfalls bei b Grad im Uhrzeigersinn — nachgerechnet über zwei
+   * Punkte desselben Meridians. Vorher stand hier -b, der Kompass zeigte also
+   * um den doppelten Winkel daneben. */
+  const scheibe = btn.querySelector('svg');
+  if (scheibe) scheibe.style.transform = `rotate(${b}deg)`;
 }
 
 /** Ungefährer Rahmen um Bayern — nur um zu warnen, nicht um zu sperren. */

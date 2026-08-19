@@ -105,15 +105,17 @@ body {
   backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
   cursor: pointer;
 }
-.north svg { width: 20px; height: 20px; fill: var(--bad); grid-area: 1/1; margin-top: -6px; }
-.north span { grid-area: 1/1; font-size: .58rem; font-weight: 700; margin-top: 12px; color: var(--muted); }
+.north svg { width: 27px; height: 27px; }
+.north .nord { fill: var(--bad); }
+.north .sued { fill: var(--muted-2); }
+.north text { fill: var(--muted); font-family: inherit; font-size: 8px; font-weight: 700; }
 
 /* Standortknopf — rechts, über den Zoomknöpfen */
 .maploc {
   position: fixed;
-  /* Knopfsäule rechts unten, gerade über der Attributionszeile */
+  /* Knopfsäule rechts beginnt auf derselben Höhe wie der Nordknopf links */
   right: var(--gap);
-  bottom: calc(var(--bh) + 34px + env(safe-area-inset-bottom));
+  bottom: calc(var(--bh) + 54px + env(safe-area-inset-bottom));
   z-index: 450;
   width: 42px; height: 42px;
   display: grid; place-items: center;
@@ -133,7 +135,7 @@ body {
 .mapmess {
   position: fixed;
   right: var(--gap);
-  bottom: calc(var(--bh) + 130px + env(safe-area-inset-bottom));
+  bottom: calc(var(--bh) + 150px + env(safe-area-inset-bottom));
   z-index: 450;
   width: 42px; height: 42px;
   display: grid; place-items: center;
@@ -150,7 +152,7 @@ body {
 .maptap {
   position: fixed;
   right: var(--gap);
-  bottom: calc(var(--bh) + 82px + env(safe-area-inset-bottom));
+  bottom: calc(var(--bh) + 102px + env(safe-area-inset-bottom));
   z-index: 450;
   width: 42px; height: 42px;
   display: grid; place-items: center;
