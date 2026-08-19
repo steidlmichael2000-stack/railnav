@@ -1831,6 +1831,8 @@ function drawMilestones() {
       bubblingMouseEvents: false
     }).on('click', ev => {
       L.DomEvent.stopPropagation(ev);
+      // Beim Messen ist ein Stein ein bequemer Fangpunkt, kein neues Suchergebnis
+      if (messModus) { messTipp(L.latLng(p.lat, p.lon)); return; }
       applyPoint(view.ref, p.km, {
         lat: p.lat, lon: p.lon, quality: 'exakt', operator: p.operator, lineRef: p.ref
       });
@@ -1858,6 +1860,138 @@ function drawPoint() {
   }).addTo(pointLayer);
 }
 
+/* ============================ Messen ============================ */
+
+/* Luftlinie zwischen angetippten Punkten, bewusst ohne Netzabfrage: Im Gelände
+ * zählt zuerst, wie weit es geradeaus ist, und das rechnet der Browser selbst.
+ * Liegen Anfang und Ende auf der geladenen Strecke, steht zusätzlich die
+ * Differenz nach Kilometrierung dabei — die ist für die Arbeit oft die
+ * eigentliche Antwort.
+ *
+ * Die Linie liegt in der normalen Vektorebene von Leaflet und nicht in einer
+ * eigenen Pane: Eigene Panes rechnet leaflet-rotate falsch, siehe kmlPane. */
+const MESS_FARBE = '#f59e0b';        // Amber, damit es sich von Steinen (blau) und Gleisweg (grün) abhebt
+const MESS_TOL = 60;                 // bis zu so viel Abstand gilt ein Punkt als auf der Strecke
+
+let messModus = false;
+let messPunkte = [];
+let messLayer = null;
+
+const messText = m => m < 1000 ? nfM.format(m) + ' m' : fmtKm(m / 1000) + ' km';
+
+function messLaenge() {
+  let summe = 0;
+  for (let i = 1; i < messPunkte.length; i++) {
+    summe += haversine(messPunkte[i - 1][0], messPunkte[i - 1][1], messPunkte[i][0], messPunkte[i][1]);
+  }
+  return summe;
+}
+
+/** Kilometerdifferenz zwischen erstem und letztem Punkt, falls beide auf der Strecke liegen. */
+function messKmDifferenz() {
+  const e = view.ref && lineCache.get(view.ref);
+  if (!e || e.sorted.length < 2 || messPunkte.length < 2) return null;
+  const a = projectOnLine(e.sorted, messPunkte[0][0], messPunkte[0][1]);
+  const b = projectOnLine(e.sorted, messPunkte[messPunkte.length - 1][0], messPunkte[messPunkte.length - 1][1]);
+  if (!a || !b || a.dist > MESS_TOL || b.dist > MESS_TOL) return null;
+  return { km: Math.abs(b.km - a.km), von: a.km, bis: b.km };
+}
+
+function messZeichnen() {
+  if (!messLayer) return;
+  messLayer.clearLayers();
+
+  if (messPunkte.length > 1) {
+    L.polyline(messPunkte, {
+      color: MESS_FARBE, weight: 3, opacity: 0.95, dashArray: '7 5', interactive: false
+    }).addTo(messLayer);
+  }
+
+  messPunkte.forEach((p, i) => {
+    L.circleMarker(p, {
+      radius: 5, color: '#fff', weight: 2, fillColor: MESS_FARBE, fillOpacity: 1, interactive: false
+    }).addTo(messLayer);
+
+    if (!i) return;
+    const vor = messPunkte[i - 1];
+    const d = haversine(vor[0], vor[1], p[0], p[1]);
+    L.marker([(vor[0] + p[0]) / 2, (vor[1] + p[1]) / 2], {
+      interactive: false, keyboard: false,
+      icon: L.divIcon({ className: '', iconSize: null, iconAnchor: [-7, 7],
+        html: `<span class="mess-lbl">${esc(messText(d))}</span>` })
+    }).addTo(messLayer);
+  });
+}
+
+function messLeiste() {
+  const b = $('#bottom');
+  b.hidden = false;
+
+  const laenge = messLaenge();
+  const kd = messKmDifferenz();
+  const letzte = messPunkte.length > 1
+    ? haversine(...messPunkte[messPunkte.length - 2], ...messPunkte[messPunkte.length - 1])
+    : 0;
+
+  const zeilen = [];
+  if (!messPunkte.length) zeilen.push('Auf die Karte tippen setzt den ersten Punkt.');
+  else if (messPunkte.length === 1) zeilen.push('Erster Punkt steht — nächsten Punkt antippen.');
+  else zeilen.push(`${messPunkte.length} Punkte · letzter Abschnitt ${messText(letzte)}`);
+
+  b.innerHTML = `
+    <button type="button" id="bbClose" class="bb-close" aria-label="Messen beenden">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+    </button>
+    <div class="bb-head">
+      <p class="bb-title">Messen</p>
+      <span class="tag warn">Luftlinie</span>
+    </div>
+    <p class="bb-coord">${messPunkte.length > 1 ? esc(messText(laenge)) : '—'}</p>
+    <p class="bb-note plain">${esc(zeilen[0])}</p>
+    ${kd ? `<p class="bb-note plain">Nach Kilometrierung ${esc(messText(kd.km * 1000))} — von km ${esc(fmtKm(kd.von))} bis km ${esc(fmtKm(kd.bis))} der Strecke ${esc(view.ref)}.</p>` : ''}
+    <div class="bb-actions">
+      <button type="button" id="messZurueck">Punkt zurück</button>
+      <button type="button" id="messLeer">Leeren</button>
+      <button type="button" id="messFertig">Fertig</button>
+    </div>`;
+
+  const zu = $('#bbClose');
+  if (zu) zu.addEventListener('click', messEnde);
+  const zurueck = $('#messZurueck');
+  if (zurueck) zurueck.addEventListener('click', () => { messPunkte.pop(); messZeichnen(); messLeiste(); });
+  const leer = $('#messLeer');
+  if (leer) leer.addEventListener('click', () => { messPunkte = []; messZeichnen(); messLeiste(); });
+  const fertig = $('#messFertig');
+  if (fertig) fertig.addEventListener('click', messEnde);
+
+  updateBH();
+}
+
+function messStart() {
+  messModus = true;
+  messPunkte = [];
+  if (!messLayer) messLayer = L.layerGroup().addTo(map);
+  messZeichnen();
+  messLeiste();
+  closeSheet();
+  syncButtons();
+  toast('Messen: auf die Karte tippen. Der Kilometer wird dabei nicht abgelesen.');
+}
+
+function messEnde() {
+  messModus = false;
+  messPunkte = [];
+  if (messLayer) messLayer.clearLayers();
+  syncButtons();
+  renderBottom();      // zeigt wieder den vorherigen Punkt, falls es einen gibt
+}
+
+function messTipp(latlng) {
+  messPunkte.push([latlng.lat, latlng.lng]);
+  messZeichnen();
+  messLeiste();
+}
+
 /* ============================ Klick auf die Karte ============================ */
 
 /** Wie viele Meter sind CLICK_TOL_PX auf der aktuellen Zoomstufe? */
@@ -1871,6 +2005,8 @@ function toleranceMeters(latlng) {
 const tippAn = () => prefs.tap !== false;
 
 async function onMapClick(ev) {
+  // Im Messmodus setzt jeder Tipp einen Messpunkt, auch bei abgeschaltetem Ablesen
+  if (messModus) { messTipp(ev.latlng); return; }
   // Abgeschaltet, damit ein versehentlicher Tipp nicht die Anzeige umwirft.
   // Kilometersteine bleiben antippbar — die trifft man nicht zufällig.
   if (!tippAn() || view.busy) return;
@@ -2449,6 +2585,12 @@ function syncButtons() {
     }
   }
 
+  const mb = $('#mapMessBtn');
+  if (mb) {
+    mb.classList.toggle('is-on', messModus);
+    mb.setAttribute('aria-pressed', messModus ? 'true' : 'false');
+  }
+
   const tb = $('#mapTapBtn');
   if (tb) {
     tb.classList.toggle('is-on', tippAn());
@@ -2540,6 +2682,8 @@ function bind() {
   });
 
   on('#mapLocBtn', 'click', locate);
+
+  on('#mapMessBtn', 'click', () => { if (messModus) messEnde(); else messStart(); });
 
   on('#mapTapBtn', 'click', () => {
     prefs.tap = !tippAn();

@@ -25,6 +25,10 @@ am Rechner und lässt sich als App auf den Startbildschirm legen.
   in einer Ebenenliste, mit wählbarer Farbe, wählbarem Symbol und Namen auf der Karte. Sie bleiben
   auf dem Gerät und sind auch offline wieder da (siehe unten).
 - **Eigener WMS-Layer** als Overlay, auch für zugangsgeschützte Dienste (siehe unten).
+- **Messen** — Punkte auf der Karte antippen, die Luftlinie steht als Maßzahl an jedem Abschnitt
+  und als Summe in der Leiste. Liegen Anfang und Ende auf der geladenen Strecke, steht die
+  Differenz **nach Kilometrierung** daneben; die Abweichung zwischen beiden Zahlen zeigt gleich,
+  wie stark es dort krümmt oder wie widersprüchlich die Steine stehen.
 - **Hintergrund verblassen** — Karte oder Luftbild stufenlos bis auf null, dann bleibt nur der
   Bahn- bzw. WMS-Layer stehen; darunter liegt Weiß, damit schwarze Strichzeichnungen auch im
   Dunkelmodus lesbar bleiben.
@@ -37,6 +41,11 @@ Nur die Streckennummer ohne Kilometer zeigt den Streckenverlauf.
 Die Anzeige unten lässt sich über das **×** wieder wegdrücken, und der Fadenkreuz-Knopf auf der
 Karte schaltet das Ablesen durch Tippen ganz ab — dann wirft ein versehentlicher Tipp die Anzeige
 nicht mehr um. Kilometersteine bleiben antippbar, die trifft man nicht zufällig.
+
+Der Knopf mit dem Lineal darüber schaltet das **Messen** ein. Solange es läuft, setzt jeder Tipp
+einen Messpunkt statt einen Kilometer abzulesen, und ein Kilometerstein ist ein bequemer Fangpunkt.
+Gerechnet wird ohne Netzabfrage im Browser; die Länge entlang des Gleises bleibt der Feinrechnung
+in der Richtung km → Position vorbehalten.
 
 ## Wie genau ist das?
 

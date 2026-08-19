@@ -131,6 +131,23 @@ body {
 .maploc.busy { opacity: .6; }
 .maploc.busy svg .ring { stroke-dasharray: 6 5; }
 
+/* Messen — über dem Knopf für das Ablesen */
+.mapmess {
+  position: fixed;
+  right: var(--gap);
+  bottom: calc(var(--bh) + 204px + env(safe-area-inset-bottom));
+  z-index: 450;
+  width: 42px; height: 42px;
+  display: grid; place-items: center;
+  border-radius: 50%; border: 1px solid var(--line);
+  background: var(--glass); color: var(--muted-2);
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+  cursor: pointer;
+}
+.mapmess svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linejoin: round; stroke-linecap: round; }
+.mapmess.is-on { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, transparent); }
+
 /* Tippen scharf stellen — sitzt über dem Standortknopf */
 .maptap {
   position: fixed;
@@ -438,6 +455,16 @@ body {
 .kml-legende span {
   display: inline-flex; align-items: center; gap: 4px;
   font-size: .74rem; color: var(--muted); font-variant-numeric: tabular-nums;
+}
+
+/* Maßzahl an der gemessenen Strecke */
+.mess-lbl {
+  display: block;
+  font-size: .72rem; font-weight: 700; line-height: 1;
+  color: var(--warn);
+  text-shadow: 0 0 3px var(--bg), 0 0 3px var(--bg), 0 0 5px var(--bg);
+  white-space: nowrap; pointer-events: none;
+  font-variant-numeric: tabular-nums;
 }
 
 /* inline würde die Grundlinie mitrechnen und das Symbol um ein Haar versetzen */
