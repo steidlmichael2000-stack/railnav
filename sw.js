@@ -5,7 +5,7 @@
  * neue Version sofort ankommt statt hinter einem alten Cache zu hängen.
  */
 
-const VERSION = 'v7';
+const VERSION = 'v8';
 const SHELL = `railnav-shell-${VERSION}`;
 const TILES = `railnav-tiles-${VERSION}`;
 const DATA = `railnav-data-${VERSION}`;
@@ -45,10 +45,17 @@ async function trim(cacheName, max) {
   await Promise.all(keys.slice(0, keys.length - max).map(k => cache.delete(k)));
 }
 
-async function networkFirst(request, cacheName) {
+async function networkFirst(request, cacheName, frisch) {
   const cache = await caches.open(cacheName);
   try {
-    const res = await fetch(request);
+    /* Eigene Dateien bewusst ohne HTTP-Cache holen. GitHub Pages setzt
+     * Cache-Control max-age=600, dadurch kam eine neue Fassung auf dem Gerät bis
+     * zu zehn Minuten später an — beim Entfernen der Zoomknöpfe fiel genau das
+     * auf. Der Cache hier bleibt davon unberührt und dient weiter als
+     * Offlinevorrat. */
+    const res = frisch && request.method === 'GET'
+      ? await fetch(request.url, { cache: 'reload', credentials: 'same-origin' })
+      : await fetch(request);
     if (res && res.ok) cache.put(request, res.clone());
     return res;
   } catch (err) {
@@ -91,10 +98,10 @@ self.addEventListener('fetch', event => {
   if (!/^https?:$/.test(url.protocol)) return;
 
   if (url.origin === self.location.origin) {
-    event.respondWith(networkFirst(request, SHELL));
+    event.respondWith(networkFirst(request, SHELL, true));
   } else if (TILE_HOSTS.some(h => url.hostname === h || url.hostname.endsWith('.' + h))) {
     event.respondWith(cacheFirst(request, TILES, MAX_TILES));
   } else if (url.hostname === 'api.openrailwaymap.org') {
-    event.respondWith(networkFirst(request, DATA));
+    event.respondWith(networkFirst(request, DATA, false));
   }
 });

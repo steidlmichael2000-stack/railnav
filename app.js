@@ -1032,15 +1032,19 @@ function kmlFelder(akte) {
 }
 
 /* Welches Merkmal taugt zum Unterscheiden? Es braucht mindestens zwei und
- * höchstens so viele Werte, wie es Formen gibt. Namen wie "Marker type" oder
- * "Code" gehen vor, sonst das Merkmal mit den wenigsten Werten. */
+ * höchstens so viele Werte, wie es Formen gibt.
+ *
+ * "Code" geht vor: Das ist in den Ausgaben der Vermessungsprogramme die
+ * fachliche Einordnung des Punktes (GVPV, PS0 bis PS3), während "Marker type"
+ * nur die Zeichensymbolnummer des erzeugenden Programms ist. Nach der Sache zu
+ * unterscheiden ist nützlicher als nach dem Zeichensatz. */
 function kmlAutoFeld(akte) {
   const formen = Object.keys(KML_FORMEN).length;
   const kandidaten = kmlFelder(akte).filter(f => f.werte >= 2 && f.werte <= formen);
   if (!kandidaten.length) return null;
-  const rang = f => /marker/i.test(f.key) ? 0
-    : /typ|type/i.test(f.key) ? 1
-    : /code|art|kategor|symbol|klasse/i.test(f.key) ? 2 : 3;
+  const rang = f => /code/i.test(f.key) ? 0
+    : /art|kategor|klasse|gruppe/i.test(f.key) ? 1
+    : /marker|typ|type|symbol/i.test(f.key) ? 2 : 3;
   kandidaten.sort((a, b) => rang(a) - rang(b) || a.werte - b.werte || a.key.localeCompare(b.key));
   return kandidaten[0].key;
 }
@@ -1504,7 +1508,7 @@ function kmlEbene(akte) {
      * Fangpunkt und keine Auskunft. */
     l.on('click', ev => {
       L.DomEvent.stopPropagation(ev);
-      if (messModus) { messTipp(L.latLng(kmlNaechsterKnoten(o, ev.latlng))); return; }
+      if (messModus) { messTipp(ev.latlng); return; }     // Fangen erledigt messTipp
       const html = kmlPopup(o, akte);
       if (!html) return;
       L.popup({
@@ -1700,7 +1704,8 @@ function kmlListe() {
   }));
 
   box.querySelectorAll('[data-kauto]').forEach(btn => btn.addEventListener('click', () =>
-    stilGesetzt(Number(btn.dataset.kauto), { autoFeld: btn.dataset.wert })));
+    // autoFeldFest: eine bewusste Wahl soll ein späterer Standardwechsel nicht umwerfen
+    stilGesetzt(Number(btn.dataset.kauto), { autoFeld: btn.dataset.wert, autoFeldFest: true })));
 
   box.querySelectorAll('[data-klabel]').forEach(btn => btn.addEventListener('click', () => {
     const i = Number(btn.dataset.klabel), a = kmlAkten[i];
@@ -1801,6 +1806,15 @@ async function kmlBoot() {
   map.on('moveend', kmlLabels);
   try { kmlAkten = await kmlLaden(); }
   catch { return; }        // privater Modus oder gesperrter Speicher
+
+  /* Schon geladene Dateien auf den aktuellen Standard nachziehen — sonst würde
+   * eine bereits abgelegte Datei ewig nach dem alten Merkmal unterscheiden. */
+  for (const a of kmlAkten) {
+    if (a.symbol !== 'auto' || a.autoFeldFest) continue;
+    const feld = kmlAutoFeld(a);
+    if (feld && feld !== a.autoFeld) { a.autoFeld = feld; kmlKopfMerken(a); }
+  }
+
   for (const a of kmlAkten) if (a.sichtbar) kmlZeigen(a, true);
   kmlLabels();
   kmlListe();
@@ -1854,7 +1868,7 @@ function drawMilestones() {
     }).on('click', ev => {
       L.DomEvent.stopPropagation(ev);
       // Beim Messen ist ein Stein ein bequemer Fangpunkt, kein neues Suchergebnis
-      if (messModus) { messTipp(L.latLng(p.lat, p.lon)); return; }
+      if (messModus) { messTipp(ev.latlng || L.latLng(p.lat, p.lon)); return; }
       applyPoint(view.ref, p.km, {
         lat: p.lat, lon: p.lon, quality: 'exakt', operator: p.operator, lineRef: p.ref
       });
@@ -1895,9 +1909,13 @@ function drawPoint() {
 const MESS_FARBE = '#f59e0b';        // Amber, damit es sich von Steinen (blau) und Gleisweg (grün) abhebt
 const MESS_TOL = 60;                 // bis zu so viel Abstand gilt ein Punkt als auf der Strecke
 
+const MESS_FANG_PX = 26;             // Umkreis, in dem gefangen wird
+
 let messModus = false;
 let messPunkte = [];
 let messLayer = null;
+let messKandidaten = [];             // Auswahl für den zuletzt gesetzten Punkt
+let messWahl = 0;
 
 const messText = m => m < 1000 ? nfM.format(m) + ' m' : fmtKm(m / 1000) + ' km';
 
@@ -1917,6 +1935,49 @@ function messKmDifferenz() {
   const b = projectOnLine(e.sorted, messPunkte[messPunkte.length - 1][0], messPunkte[messPunkte.length - 1][1]);
   if (!a || !b || a.dist > MESS_TOL || b.dist > MESS_TOL) return null;
   return { km: Math.abs(b.km - a.km), von: a.km, bis: b.km };
+}
+
+/* Was liegt nah genug am Tipp, um gefangen zu werden? Kilometersteine der
+ * geladenen Strecke und Objekte aus sichtbaren KML-Dateien. Gefangen wird sofort
+ * auf das Nächstliegende — die übrigen stehen zum Umschalten in der Leiste, denn
+ * gerade bei Punktpaaren wenige Meter auseinander trifft der Finger nicht
+ * unbedingt den gemeinten. */
+function messKandidatenFinden(latlng) {
+  const tol = Math.max(pixelInMeter(latlng, MESS_FANG_PX), 2);
+  const raus = [];
+
+  const e = view.ref && lineCache.get(view.ref);
+  if (e) {
+    for (const p of e.sorted) {
+      const d = haversine(latlng.lat, latlng.lng, p.lat, p.lon);
+      if (d <= tol) raus.push({ name: 'km ' + fmtKm(p.km), quelle: 'Stein ' + (p.ref || view.ref), koord: [p.lat, p.lon], dist: d });
+    }
+  }
+
+  for (const a of kmlAkten) {
+    if (!a.sichtbar) continue;
+    for (const o of a.objekte) {
+      const k = kmlNaechsterKnoten(o, latlng);
+      if (!k) continue;
+      const d = haversine(latlng.lat, latlng.lng, k[0], k[1]);
+      if (d <= tol) raus.push({ name: o.name || '(ohne Namen)', quelle: a.name, koord: k, dist: d });
+    }
+  }
+
+  raus.sort((x, y) => x.dist - y.dist);
+
+  /* Dieselbe Stelle nicht mehrfach anbieten: Ist eine Datei zweimal geladen oder
+   * liegen zwei Objekte auf derselben Koordinate, verdrängen die Doppelgänger
+   * sonst die tatsächlich anderen Punkte aus der Auswahl. */
+  const gesehen = new Set();
+  const eindeutig = [];
+  for (const k of raus) {
+    const stelle = k.koord[0].toFixed(7) + ',' + k.koord[1].toFixed(7);
+    if (gesehen.has(stelle)) continue;
+    gesehen.add(stelle);
+    eindeutig.push(k);
+  }
+  return eindeutig.slice(0, 4);
 }
 
 function messZeichnen() {
@@ -1955,10 +2016,21 @@ function messLeiste() {
     ? haversine(...messPunkte[messPunkte.length - 2], ...messPunkte[messPunkte.length - 1])
     : 0;
 
+  const gewaehlt = messPunkte.length ? messKandidaten[messWahl] : null;
+  const gefangen = gewaehlt && messWahl > 0 ? ` · gefangen auf ${gewaehlt.name}` : '';
+
   const zeilen = [];
   if (!messPunkte.length) zeilen.push('Auf die Karte tippen setzt den ersten Punkt.');
-  else if (messPunkte.length === 1) zeilen.push('Erster Punkt steht — nächsten Punkt antippen.');
-  else zeilen.push(`${messPunkte.length} Punkte · letzter Abschnitt ${messText(letzte)}`);
+  else if (messPunkte.length === 1) zeilen.push('Erster Punkt steht — nächsten Punkt antippen' + gefangen + '.');
+  else zeilen.push(`${messPunkte.length} Punkte · letzter Abschnitt ${messText(letzte)}${gefangen}`);
+
+  /* Auswahl nur zeigen, wenn es überhaupt etwas zu wählen gibt: der Tippstelle
+   * gegenüber mindestens ein Fangpunkt. */
+  const wahl = messKandidaten.length > 1 && messPunkte.length
+    ? `<div class="pick">${messKandidaten.map((k, i) =>
+        `<button type="button" data-mw="${i}"${i === messWahl ? ' class="is-on"' : ''}>${esc(k.name)}` +
+        `<small>${i ? esc(nfM.format(k.dist) + ' m · ' + k.quelle) : 'Tippstelle'}</small></button>`).join('')}</div>`
+    : '';
 
   b.innerHTML = `
     <button type="button" id="bbClose" class="bb-close" aria-label="Messen beenden">
@@ -1970,6 +2042,7 @@ function messLeiste() {
     </div>
     <p class="bb-coord">${messPunkte.length > 1 ? esc(messText(laenge)) : '—'}</p>
     <p class="bb-note plain">${esc(zeilen[0])}</p>
+    ${wahl}
     ${kd ? `<p class="bb-note plain">Nach Kilometrierung ${esc(messText(kd.km * 1000))} — von km ${esc(fmtKm(kd.von))} bis km ${esc(fmtKm(kd.bis))} der Strecke ${esc(view.ref)}.</p>` : ''}
     <div class="bb-actions">
       <button type="button" id="messZurueck">Punkt zurück</button>
@@ -1980,9 +2053,29 @@ function messLeiste() {
   const zu = $('#bbClose');
   if (zu) zu.addEventListener('click', messEnde);
   const zurueck = $('#messZurueck');
-  if (zurueck) zurueck.addEventListener('click', () => { messPunkte.pop(); messZeichnen(); messLeiste(); });
+  if (zurueck) zurueck.addEventListener('click', () => {
+    messPunkte.pop();
+    messKandidaten = [];      // gehören zum entfernten Punkt
+    messZeichnen();
+    messLeiste();
+  });
   const leer = $('#messLeer');
-  if (leer) leer.addEventListener('click', () => { messPunkte = []; messZeichnen(); messLeiste(); });
+  if (leer) leer.addEventListener('click', () => {
+    messPunkte = [];
+    messKandidaten = [];
+    messZeichnen();
+    messLeiste();
+  });
+
+  // Umschalten zwischen Tippstelle und den Fangpunkten in der Nähe
+  b.querySelectorAll('[data-mw]').forEach(btn => btn.addEventListener('click', () => {
+    const i = Number(btn.dataset.mw);
+    if (!messKandidaten[i] || !messPunkte.length) return;
+    messWahl = i;
+    messPunkte[messPunkte.length - 1] = messKandidaten[i].koord;
+    messZeichnen();
+    messLeiste();
+  }));
   const fertig = $('#messFertig');
   if (fertig) fertig.addEventListener('click', messEnde);
 
@@ -1992,6 +2085,7 @@ function messLeiste() {
 function messStart() {
   messModus = true;
   messPunkte = [];
+  messKandidaten = [];
   map.closePopup();          // eine offene KML-Auskunft stört beim Messen
   if (!messLayer) messLayer = L.layerGroup().addTo(map);
   messZeichnen();
@@ -2004,24 +2098,33 @@ function messStart() {
 function messEnde() {
   messModus = false;
   messPunkte = [];
+  messKandidaten = [];
   if (messLayer) messLayer.clearLayers();
   syncButtons();
   renderBottom();      // zeigt wieder den vorherigen Punkt, falls es einen gibt
 }
 
 function messTipp(latlng) {
-  messPunkte.push([latlng.lat, latlng.lng]);
+  const nah = messKandidatenFinden(latlng);
+  messKandidaten = [{ name: 'Getippt', quelle: '', koord: [latlng.lat, latlng.lng], dist: 0 }, ...nah];
+  messWahl = nah.length ? 1 : 0;        // liegt etwas in der Nähe, darauf fangen
+  messPunkte.push(messKandidaten[messWahl].koord);
   messZeichnen();
   messLeiste();
 }
 
 /* ============================ Klick auf die Karte ============================ */
 
+/** Wie viele Meter entsprechen an dieser Stelle einer Strecke von px Bildpunkten? */
+function pixelInMeter(latlng, px) {
+  const a = map.latLngToContainerPoint(latlng);
+  const b = map.containerPointToLatLng(L.point(a.x + px, a.y));
+  return map.distance(latlng, b);
+}
+
 /** Wie viele Meter sind CLICK_TOL_PX auf der aktuellen Zoomstufe? */
 function toleranceMeters(latlng) {
-  const a = map.latLngToContainerPoint(latlng);
-  const b = map.containerPointToLatLng(L.point(a.x + CLICK_TOL_PX, a.y));
-  return Math.max(map.distance(latlng, b), 25);
+  return Math.max(pixelInMeter(latlng, CLICK_TOL_PX), 25);
 }
 
 /** Liest ein Tipp auf die Karte den Kilometer, oder ist das abgeschaltet? */

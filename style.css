@@ -596,6 +596,7 @@ html[data-theme="light"] .bb-actions .maps { color: #fff; }
   font-variant-numeric: tabular-nums;
 }
 .pick small { display: block; font-size: .68rem; font-weight: 500; opacity: .75; }
+.pick button.is-on { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
 
 /* ---------- Marker ---------- */
 
