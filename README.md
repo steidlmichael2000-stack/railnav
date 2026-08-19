@@ -18,8 +18,9 @@ am Rechner und lässt sich als App auf den Startbildschirm legen.
   nicht geschätzt, sondern an 1474 Steintripeln nachgemessen (siehe unten).
 - **Optional exakt auf dem Gleis.** Stehen die Steine weit auseinander, lässt sich der Punkt auf
   Knopfdruck entlang des tatsächlichen Gleisverlaufs rechnen statt entlang der Luftlinie.
-- **Karte, Luftbild und Bahn-Layer** umschaltbar, eigener Standort, Link zum Teilen,
-  Betriebsstellensuche über Name, DS100 oder UIC.
+- **Karte, Luftbild, DOP20 und Geländerelief** umschaltbar, dazu Bahn-Layer und
+  Flurstücksgrenzen als Auflagen, eigener Standort, Link zum Teilen, Betriebsstellensuche über
+  Name, DS100 oder UIC.
 - **Eigene KML- und KMZ-Dateien** öffnen — beliebig viele, jede einzeln ein- und ausschaltbar wie
   in einer Ebenenliste, mit wählbarer Farbe, wählbarem Symbol und Namen auf der Karte. Sie bleiben
   auf dem Gerät und sind auch offline wieder da (siehe unten).
@@ -172,6 +173,35 @@ Genauigkeit* steht, woher der Wert kommt.
    nur 165 m auseinanderliegen, geografisch aber 28 km. Ohne Prüfung würde quer durchs Land
    interpoliert. Railnav verwirft Paare, deren Luftlinie länger ist als die Kilometerdifferenz
    zulässt.
+
+## Amtliche bayerische Dienste
+
+Drei offene Dienste der Bayerischen Vermessungsverwaltung sind fest eingebaut, alle unter
+**CC BY 4.0** und mit `EPSG:3857`, laufen also ohne Umprojektion in Leaflet:
+
+| Knopf | Dienst | Layer |
+| --- | --- | --- |
+| **DOP20** | `geoservices.bayern.de/od/wms/dop/v1/dop20` | `by_dop20c` |
+| **Relief** | `geoservices.bayern.de/od/wms/dgm/v1/relief` | `by_relief_schraeglicht` |
+| **Parzellen** | `geoservices.bayern.de/od/wms/alkis/v1/parzellarkarte` | `by_alkis_parzellarkarte_umr_gelb` / `_umr_schwarz` |
+
+**DOP20** ist das amtliche Orthophoto mit 20 cm Bodenauflösung und damit wesentlich feiner als das
+weltweite Esri-Luftbild. **Relief** ist das Schräglicht aus dem Geländemodell — Dämme, Einschnitte
+und alte Trassen sind darauf deutlich zu sehen; die ebenfalls angebotene kombinierte Darstellung
+wäscht genau diese kleinen Formen weg und ist deshalb nicht eingebaut. Beides deckt nur Bayern ab;
+außerhalb antworten die Dienste mit einem leeren Bild und Status 200, also nicht mit einem Fehler,
+den man abfangen könnte — die App warnt daher selbst, wenn die Kartenmitte außerhalb liegt.
+
+Bei den Rasterbildern wird **JPEG statt PNG** angefragt: gemessen 13 kB gegenüber 172 kB je Kachel
+beim Orthophoto, ohne sichtbaren Unterschied.
+
+Die **Parzellarkarte** liegt als Auflage darüber, aber nur als Umring: Die Farbfassung mit
+Nutzungsarten bringt einen deckend weißen Grund mit (gemessen 0 % durchsichtig gegenüber 98 % beim
+Umring) und würde alles darunter verdecken. Wer sie braucht, kann sie unter *Eigener WMS-Layer* mit
+`by_alkis_parzellarkarte_farbe` laden. Die Umringe sind **gelb über Luftbildern und schwarz über der
+Karte**, sonst verschwinden sie jeweils im Untergrund. Der Dienst zeichnet sie erst unterhalb
+1:5000, also etwa ab Zoomstufe 17 — davor bleibt die Auflage leer, und die App sagt das beim
+Einschalten.
 
 ## Eigener WMS-Layer
 

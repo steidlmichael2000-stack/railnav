@@ -617,7 +617,12 @@ let recent = [];   // nicht "history" nennen — das ist window.history
 
 /* ============================ Karte ============================ */
 
-let map, baseOsm, baseSat, ormLayer, msLayer, trackLayer, pointLayer, meLayer;
+let map, baseOsm, baseSat, baseDop, baseRelief, ormLayer, parzLayer;
+let msLayer, trackLayer, pointLayer, meLayer;
+/* Hintergründe schließen sich aus, Auflagen nicht — als Verzeichnis gehalten,
+ * damit ein weiterer Dienst nur ein Eintrag und ein Knopf ist. */
+let baseLayers = {};
+let overlayLayers = {};
 let pointMarker = null;
 
 function initMap() {
@@ -646,6 +651,37 @@ function initMap() {
   baseSat = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
     maxZoom: 19, maxNativeZoom: 18, attribution: 'Luftbild: Esri, Maxar'
   });
+
+  /* Offene Dienste der Bayerischen Vermessungsverwaltung, alle CC BY 4.0 und mit
+   * EPSG:3857, laufen also direkt in Leaflet. Als WMS haben sie keine natürliche
+   * Zoomgrenze, deshalb maxZoom 22.
+   *
+   * JPEG statt PNG bei den Rasterbildern: gemessen 13 kB gegenüber 172 kB je
+   * Kachel beim Orthophoto, ohne sichtbaren Unterschied. Außerhalb Bayerns
+   * antworten die Dienste mit einem leeren Bild und Status 200 — kein Fehler,
+   * den man abfangen könnte, sondern weißer Grund. */
+  const BVV = 'DOP20/Relief/Parzellen: <a href="https://www.geodaten.bayern.de/">Bayerische Vermessungsverwaltung</a> (CC BY 4.0)';
+
+  baseDop = L.tileLayer.wms('https://geoservices.bayern.de/od/wms/dop/v1/dop20', {
+    layers: 'by_dop20c', format: 'image/jpeg', version: '1.3.0', maxZoom: 22, attribution: BVV
+  });
+
+  /* Schräglicht und nicht die kombinierte Darstellung: Das Schräglicht zeigt
+   * Dämme, Einschnitte und alte Trassen plastisch, die kombinierte Fassung wäscht
+   * genau diese kleinen Formen weg. */
+  baseRelief = L.tileLayer.wms('https://geoservices.bayern.de/od/wms/dgm/v1/relief', {
+    layers: 'by_relief_schraeglicht', format: 'image/jpeg', version: '1.3.0', maxZoom: 22, attribution: BVV
+  });
+
+  /* Parzellarkarte nur als Umring: Die Farbfassung bringt einen deckend weißen
+   * Grund mit (gemessen 0 % durchsichtig) und würde alles darunter verdecken.
+   * Der Dienst zeichnet erst unterhalb 1:5000, also etwa ab Zoomstufe 17. */
+  parzLayer = L.tileLayer.wms('https://geoservices.bayern.de/od/wms/alkis/v1/parzellarkarte', {
+    layers: 'by_alkis_parzellarkarte_umr_schwarz', format: 'image/png', transparent: true,
+    version: '1.3.0', maxZoom: 22, attribution: BVV
+  });
+
+  baseLayers = { osm: baseOsm, sat: baseSat, dop: baseDop, relief: baseRelief };
   ormLayer = L.tileLayer('https://{s}.tiles.openrailwaymap.org/standard/{z}/{x}/{y}.png', {
     subdomains: 'abc', maxZoom: 19, maxNativeZoom: 19, opacity: 0.85,
     attribution: '<a href="https://www.openrailwaymap.org/">OpenRailwayMap</a>'
@@ -660,8 +696,10 @@ function initMap() {
   L.control.zoom({ position: 'bottomright' }).addTo(map);
   L.control.scale({ imperial: false, position: 'bottomleft' }).addTo(map);
 
+  overlayLayers = { orm: ormLayer, parz: parzLayer };
   if (prefs.orm !== false) ormLayer.addTo(map);
-  if (prefs.base === 'sat') setBase('sat');
+  if (prefs.parz) { parzFarbeAnpassen(); parzLayer.addTo(map); }
+  if (prefs.base && prefs.base !== 'osm') setBase(prefs.base);
   applyBaseOpacity();
   if (prefs.wms && prefs.wms.on) wmsApply(true);
 
@@ -682,15 +720,47 @@ function syncNorth() {
   if (pfeil) pfeil.style.transform = `rotate(${-b}deg)`;
 }
 
-function setBase(which) {
-  prefs.base = which;
-  const on = which === 'sat' ? baseSat : baseOsm;
-  const off = which === 'sat' ? baseOsm : baseSat;
-  if (map.hasLayer(off)) map.removeLayer(off);
-  if (!map.hasLayer(on)) on.addTo(map);
-  applyBaseOpacity();
+/** Ungefährer Rahmen um Bayern — nur um zu warnen, nicht um zu sperren. */
+const BAYERN = { s: 47.2, w: 8.9, n: 50.6, o: 13.9 };
+
+function ausserhalbBayerns() {
+  const c = map.getCenter();
+  return c.lat < BAYERN.s || c.lat > BAYERN.n || c.lng < BAYERN.w || c.lng > BAYERN.o;
+}
+
+/* Schwarze Umringe verschwinden auf dem Luftbild, gelbe auf der hellen Karte —
+ * deshalb richtet sich die Farbe nach dem gewählten Hintergrund. */
+function parzFarbeAnpassen() {
+  if (!parzLayer) return;
+  const wunsch = (prefs.base || 'osm') === 'osm'
+    ? 'by_alkis_parzellarkarte_umr_schwarz'
+    : 'by_alkis_parzellarkarte_umr_gelb';
+  if (parzLayer.wmsParams.layers !== wunsch) parzLayer.setParams({ layers: wunsch });
+}
+
+/** Reihenfolge der Auflagen: eigener WMS unten, dann Parzellen, Bahn-Layer oben. */
+function ordneAuflagen() {
   if (wmsLayer) wmsLayer.bringToFront();
+  if (map.hasLayer(parzLayer)) parzLayer.bringToFront();
   if (map.hasLayer(ormLayer)) ormLayer.bringToFront();
+}
+
+function setBase(which) {
+  if (!baseLayers[which]) which = 'osm';
+  prefs.base = which;
+
+  for (const [kennung, layer] of Object.entries(baseLayers)) {
+    if (kennung !== which && map.hasLayer(layer)) map.removeLayer(layer);
+  }
+  if (!map.hasLayer(baseLayers[which])) baseLayers[which].addTo(map);
+
+  if ((which === 'dop' || which === 'relief') && ausserhalbBayerns()) {
+    toast('Dieser Dienst deckt nur Bayern ab — hier bleibt der Grund weiß.');
+  }
+
+  parzFarbeAnpassen();
+  applyBaseOpacity();
+  ordneAuflagen();
   saveStore();
   syncButtons();
 }
@@ -698,8 +768,7 @@ function setBase(which) {
 /** Hintergrund verblassen, damit Bahn- oder WMS-Layer allein lesbar werden. */
 function applyBaseOpacity() {
   const o = (prefs.baseOpacity == null ? 100 : prefs.baseOpacity) / 100;
-  if (baseOsm) baseOsm.setOpacity(o);
-  if (baseSat) baseSat.setOpacity(o);
+  for (const layer of Object.values(baseLayers)) layer.setOpacity(o);
 
   // Sobald der Hintergrund durchscheinend wird, muss darunter Weiß liegen:
   // Bahn- und IVL-Pläne sind schwarze Strichzeichnungen und wären im
@@ -711,9 +780,23 @@ function applyBaseOpacity() {
   if (val) val.textContent = Math.round(o * 100) + ' %';
 }
 
-function toggleOrm() {
-  if (map.hasLayer(ormLayer)) { map.removeLayer(ormLayer); prefs.orm = false; }
-  else { ormLayer.addTo(map); ormLayer.bringToFront(); prefs.orm = true; }
+function toggleOverlay(kennung) {
+  const layer = overlayLayers[kennung];
+  if (!layer) return;
+
+  if (map.hasLayer(layer)) {
+    map.removeLayer(layer);
+    prefs[kennung] = false;
+  } else {
+    if (kennung === 'parz') {
+      parzFarbeAnpassen();
+      if (ausserhalbBayerns()) toast('Die Parzellarkarte deckt nur Bayern ab.');
+      else if (map.getZoom() < 17) toast('Parzellen zeichnet der Dienst erst ab Zoomstufe 17 (1:5000).');
+    }
+    layer.addTo(map);
+    prefs[kennung] = true;
+  }
+  ordneAuflagen();
   saveStore();
   syncButtons();
 }
@@ -2359,8 +2442,12 @@ function syncButtons() {
     b.classList.toggle('is-on', b.dataset.base === (prefs.base || 'osm')));
   document.querySelectorAll('[data-theme]').forEach(b =>
     b.classList.toggle('is-on', b.dataset.theme === (prefs.theme || 'auto')));
-  const orm = $('#ormBtn');
-  if (orm && map) orm.classList.toggle('is-on', map.hasLayer(ormLayer));
+  if (map) {
+    for (const [kennung, layer] of Object.entries(overlayLayers)) {
+      const btn = $(kennung === 'orm' ? '#ormBtn' : '#parzBtn');
+      if (btn) btn.classList.toggle('is-on', map.hasLayer(layer));
+    }
+  }
 
   const tb = $('#mapTapBtn');
   if (tb) {
@@ -2432,7 +2519,8 @@ function bind() {
   on('#facGo', 'click', runFacility);
 
   document.querySelectorAll('[data-base]').forEach(b => b.addEventListener('click', () => setBase(b.dataset.base)));
-  on('#ormBtn', 'click', toggleOrm);
+  on('#ormBtn', 'click', () => toggleOverlay('orm'));
+  on('#parzBtn', 'click', () => toggleOverlay('parz'));
   document.querySelectorAll('[data-theme]').forEach(b => b.addEventListener('click', () => {
     prefs.theme = b.dataset.theme;
     applyTheme();

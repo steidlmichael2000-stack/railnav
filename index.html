@@ -87,13 +87,28 @@
       <div class="seg" role="group" aria-label="Kartenhintergrund">
         <button class="seg-btn" type="button" data-base="osm">Karte</button>
         <button class="seg-btn" type="button" data-base="sat">Luftbild</button>
+        <button class="seg-btn" type="button" data-base="dop">DOP20</button>
+        <button class="seg-btn" type="button" data-base="relief">Relief</button>
+      </div>
+      <div class="seg" role="group" aria-label="Auflagen" style="margin-top:7px">
         <button class="seg-btn" type="button" id="ormBtn">Bahn-Layer</button>
+        <button class="seg-btn" type="button" id="parzBtn">Parzellen</button>
       </div>
       <label class="slider-row" for="baseOpacity">Hintergrund
         <input id="baseOpacity" type="range" min="0" max="100" step="5" value="100">
         <span id="baseOpacityVal" class="slider-val">100&thinsp;%</span>
       </label>
       <p class="fine">Ganz nach links heruntergezogen bleibt nur der Bahn- bzw. WMS-Layer stehen.</p>
+      <p class="fine"><strong>DOP20</strong> ist das amtliche Orthophoto der Bayerischen
+      Vermessungsverwaltung mit 20 cm Bodenauflösung, wesentlich feiner als das weltweite
+      <em>Luftbild</em> von Esri. <strong>Relief</strong> ist das Schräglicht aus dem
+      Geländemodell — darauf sind Dämme, Einschnitte und alte Trassen deutlich zu sehen.
+      Beides nur innerhalb Bayerns; außerhalb bleibt der Grund weiß.</p>
+      <p class="fine"><strong>Parzellen</strong> legt die Flurstücksgrenzen aus ALKIS darüber,
+      gelb über Luftbildern und schwarz über der Karte. Der Dienst zeichnet sie erst unterhalb
+      1:5000, also etwa ab Zoomstufe 17. Die Farbfassung mit Nutzungsarten bringt einen deckenden
+      weißen Grund mit und taugt nicht als Auflage — wer sie braucht, kann sie unter
+      <em>Eigener WMS-Layer</em> mit dem Layer <code>by_alkis_parzellarkarte_farbe</code> laden.</p>
     </details>
 
     <details class="sheet-sec" data-sec="kml">
@@ -175,7 +190,8 @@
       Vermessung, Disposition oder sicherheitsrelevante Entscheidungen. Zwischen zwei Steinen
       wird geradlinig interpoliert; im Bogen weicht das ab.</p>
       <p class="fine">Daten © OpenStreetMap-Mitwirkende · Abfrage über die OpenRailwayMap-API ·
-      Bahn-Layer OpenRailwayMap (CC-BY-SA 2.0) · Luftbild Esri</p>
+      Bahn-Layer OpenRailwayMap (CC-BY-SA 2.0) · Luftbild Esri · DOP20, Geländerelief und
+      Parzellarkarte: Bayerische Vermessungsverwaltung (CC BY 4.0)</p>
       <p class="fine"><a href="https://github.com/steidlmichael2000-stack/railnav" target="_blank" rel="noopener">Quellcode auf GitHub</a></p>
     </details>
 

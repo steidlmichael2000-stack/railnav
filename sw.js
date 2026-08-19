@@ -5,7 +5,7 @@
  * neue Version sofort ankommt statt hinter einem alten Cache zu hängen.
  */
 
-const VERSION = 'v5';
+const VERSION = 'v7';
 const SHELL = `railnav-shell-${VERSION}`;
 const TILES = `railnav-tiles-${VERSION}`;
 const DATA = `railnav-data-${VERSION}`;
@@ -17,7 +17,8 @@ const SHELL_FILES = [
   'manifest.webmanifest', 'icon.svg'
 ];
 
-const TILE_HOSTS = ['tile.openstreetmap.org', 'tiles.openrailwaymap.org', 'server.arcgisonline.com'];
+const TILE_HOSTS = ['tile.openstreetmap.org', 'tiles.openrailwaymap.org', 'server.arcgisonline.com',
+  'geoservices.bayern.de'];
 const MAX_TILES = 600;
 
 self.addEventListener('install', event => {
@@ -63,16 +64,22 @@ async function networkFirst(request, cacheName) {
 }
 
 async function cacheFirst(request, cacheName, max) {
-  const cache = await caches.open(cacheName);
-  const hit = await cache.match(request);
-  if (hit) return hit;
-  const res = await fetch(request);
-  // Kacheln kommen ohne CORS zurück (opaque) — trotzdem brauchbar für <img>
-  if (res && (res.ok || res.type === 'opaque')) {
-    cache.put(request, res.clone());
-    trim(cacheName, max);
+  try {
+    const cache = await caches.open(cacheName);
+    const hit = await cache.match(request);
+    if (hit) return hit;
+    const res = await fetch(request);
+    // Kacheln kommen ohne CORS zurück (opaque) — trotzdem brauchbar für <img>
+    if (res && (res.ok || res.type === 'opaque')) {
+      cache.put(request, res.clone());
+      trim(cacheName, max);
+    }
+    return res;
+  } catch (err) {
+    /* Scheitert irgendein Schritt des Zwischenspeichers, darf das die Kachel
+     * nicht kosten: dann eben unverändert durchreichen. */
+    return fetch(request);
   }
-  return res;
 }
 
 self.addEventListener('fetch', event => {
