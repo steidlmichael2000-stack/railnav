@@ -284,6 +284,15 @@ body {
   filter: drop-shadow(0 0 2px var(--bg)) drop-shadow(0 0 3px var(--bg));
 }
 
+/* Laufende Entfernung neben dem Fadenkreuz */
+.mitte-zahl {
+  position: absolute; left: 46px; top: 50%; transform: translateY(-50%);
+  font-size: .84rem; font-weight: 700; color: var(--warn);
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+  text-shadow: 0 0 3px var(--bg), 0 0 3px var(--bg), 0 0 5px var(--bg);
+}
+.mitte-zahl:empty { display: none; }
+
 /* ---------- Verlauf beim Tippen ---------- */
 
 .suggest {
@@ -612,6 +621,9 @@ body {
 .bb-err { font-size: .86rem; color: var(--bad); margin: 0; }
 
 .bb-actions { display: flex; gap: 8px; margin-top: 11px; }
+/* Fünf kurze Knöpfe beim Messen: umbrechen statt die Beschriftung zerquetschen */
+.bb-actions.wrap { flex-wrap: wrap; }
+.bb-actions.wrap button { flex: 1 1 28%; padding: 10px 6px; }
 .bb-actions a, .bb-actions button {
   flex: 1 1 0; min-width: 0;
   display: grid; place-items: center;

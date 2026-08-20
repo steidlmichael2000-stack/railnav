@@ -54,11 +54,22 @@ Linie oder Fläche auf den nächstgelegenen Stützpunkt; die Sprechblase mit den
 solange weg. Gerechnet wird ohne Netzabfrage im Browser; die Länge entlang des Gleises bleibt der
 Feinrechnung in der Richtung km → Position vorbehalten.
 
-Für Maße, die genau sein müssen, gibt es zwei Wege statt des Fingers: **Kartenmitte setzen** legt
-den Punkt auf das feste Fadenkreuz in der Bildmitte — die Karte lässt sich beliebig genau darunter
-schieben —, und **Standort setzen** übernimmt die eigene Position. Läuft die Standortverfolgung,
-zeigt eine gestrichelte Linie samt Maßzahl laufend den Abstand vom letzten Messpunkt zum eigenen
-Standort. „Genau 20 m von diesem Punkt" wird damit zur Laufaufgabe: hingehen, bis die Zahl stimmt.
+**Live gemessen wird zur Bildmitte.** Sobald ein Punkt steht, läuft eine gestrichelte Linie vom
+letzten Punkt zum Fadenkreuz in der Bildmitte, und die Entfernung steht direkt daneben — beim
+Schieben der Karte läuft sie mit, in jedem Bild. So bekommt man eine Entfernung sofort, ohne erst
+einen zweiten Punkt zu setzen; **Mitte** friert sie als Abschnitt ein. Die Zahl steht am Fadenkreuz
+und damit immer an derselben Stelle des Bildschirms, ruhig zu lesen, während sich die Karte bewegt.
+Für „genau 20 m von diesem Punkt" schiebt man also, bis 20 m dasteht.
+
+Der Finger trifft keine 20 cm — deshalb diese beiden Wege statt des Antippens: **Mitte** setzt auf
+das Fadenkreuz, **Standort** übernimmt die eigene Position. Läuft die Standortverfolgung, steht der
+Abstand vom letzten Messpunkt zum eigenen Standort außerdem in der Zeile oben; im Gelände ist
+„genau 20 m" damit eine Laufaufgabe: hingehen, bis die Zahl stimmt.
+
+Gefangen wird nur, was auch in Metern nah liegt (bis 20 m). Der Umkreis von 26 Bildpunkten allein
+genügte nicht: Auf Zoomstufe 15 sind das rund 125 m, und bei einer dichten Punktdatei wäre so jeder
+Tipp still auf irgendeinen Punkt gesprungen — die Messung um diese Strecke falsch, ohne dass man es
+sieht. Weiter entfernte Punkte stehen weiter zur Auswahl, nur nicht automatisch.
 
 **Zoomknöpfe gibt es nicht** — am Rechner zoomt das Mausrad, am Gerät zwei Finger oder ein
 Doppeltipp. Der Platz rechts unten gehört den drei eigenen Knöpfen: Messen, Ablesen, Standort.

@@ -705,6 +705,7 @@ function initMap() {
   if (prefs.wms && prefs.wms.on) wmsApply(true);
 
   map.on('click', onMapClick);
+  map.on('move zoom rotate', messLiveZeichnen);
   map.on('moveend rotateend', liveLeiste);
   map.on('zoomend', drawMilestones);
   map.on('rotate rotateend', syncNorth);
@@ -1915,13 +1916,25 @@ function drawPoint() {
 const MESS_FARBE = '#f59e0b';        // Amber, damit es sich von Steinen (blau) und Gleisweg (grün) abhebt
 const MESS_TOL = 60;                 // bis zu so viel Abstand gilt ein Punkt als auf der Strecke
 
-const MESS_FANG_PX = 26;             // Umkreis, in dem gefangen wird
+const MESS_FANG_PX = 26;             // Umkreis, in dem Fangpunkte angeboten werden
+/* Von selbst gefangen wird nur innerhalb dieser Strecke. Der Umkreis in
+ * Bildpunkten allein genügt nicht: Auf Zoomstufe 15 sind 26 px rund 125 m, und
+ * bei einer dichten Punktdatei würde dann jeder Tipp still auf irgendeinen Punkt
+ * springen — die Messung wäre um diese Strecke falsch, ohne dass man es sieht.
+ * Weiter entfernte Punkte stehen weiter zur Auswahl, nur eben nicht automatisch.
+ *
+ * 20 m, weil genaues Arbeiten ohnehin nah herangezoomt stattfindet: Ab Zoomstufe
+ * 18 sind 26 px selbst nur noch 15 m, dort bestimmt also der Bildabstand. Beim
+ * groben Messen weiter außen bleibt der Punkt dagegen dort, wo getippt wurde. */
+const MESS_FANG_MAX_M = 20;
 
 let messModus = false;
 let messPunkte = [];
 let messLayer = null;
+let messLiveLayer = null;            // nur die laufende Linie zum Standort
 let messKandidaten = [];             // Auswahl für den zuletzt gesetzten Punkt
 let messWahl = 0;
+let messLetzterTipp = 0;             // Zeitpunkt des letzten angenommenen Tipps
 
 const messText = m => m < 1000 ? nfM.format(m) + ' m' : fmtKm(m / 1000) + ' km';
 
@@ -1986,25 +1999,56 @@ function messKandidatenFinden(latlng) {
   return eindeutig.slice(0, 4);
 }
 
+/* Livemessen: Steht ein Punkt, läuft die Strecke vom letzten Punkt zur
+ * Kartenmitte mit — beim Schieben der Karte, bei jedem Bild. Damit bekommt man
+ * eine Entfernung sofort, ohne erst einen zweiten Punkt zu setzen; „Mitte"
+ * friert sie als Punkt ein.
+ *
+ * Die Linie wird dabei nicht neu gebaut, sondern nur umgesetzt, und die Zahl
+ * steht am Fadenkreuz selbst — also immer an derselben Stelle des Bildschirms,
+ * ruhig zu lesen, während sich die Karte bewegt. Ein Neuaufbau je Bild würde
+ * flackern und wäre auf dem Handy zäh. */
+
+let messLiveLinie = null;
+
+function messLiveZeichnen() {
+  const zahl = $('#mitteZahl');
+  const zeile = $('#messLive');
+
+  if (!messModus || !messPunkte.length) {
+    if (messLiveLinie) { messLiveLinie.remove(); messLiveLinie = null; }
+    if (zahl) zahl.textContent = '';
+    if (zeile) zeile.textContent = '';
+    return;
+  }
+
+  const von = messPunkte[messPunkte.length - 1];
+  const mitte = map.getCenter();
+  const d = haversine(von[0], von[1], mitte.lat, mitte.lng);
+
+  if (!messLiveLinie) {
+    messLiveLinie = L.polyline([von, [mitte.lat, mitte.lng]], {
+      color: MESS_FARBE, weight: 2, opacity: 0.75, dashArray: '4 5', interactive: false
+    }).addTo(messLiveLayer);
+  } else {
+    messLiveLinie.setLatLngs([von, [mitte.lat, mitte.lng]]);
+  }
+
+  if (zahl) zahl.textContent = messText(d);
+  if (zeile) {
+    zeile.textContent = messPunkte.length > 1
+      ? `bis Kartenmitte ${messText(d)} · mit diesem Abschnitt ${messText(messLaenge() + d)}`
+      : `bis Kartenmitte ${messText(d)}`;
+  }
+}
+
 function messZeichnen() {
   if (!messLayer) return;
   messLayer.clearLayers();
+  if (messLiveLayer) messLiveLayer.clearLayers();
+  messLiveLinie = null;
+  messLiveZeichnen();
 
-  /* Vom letzten Punkt zum eigenen Standort: So wird „genau 20 m von hier" zur
-   * Laufaufgabe — hingehen, bis die Zahl stimmt. */
-  if (messModus && ortLetzt && messPunkte.length) {
-    const letzterPunkt = messPunkte[messPunkte.length - 1];
-    const hier = [ortLetzt.lat, ortLetzt.lon];
-    L.polyline([letzterPunkt, hier], {
-      color: MESS_FARBE, weight: 2, opacity: 0.7, dashArray: '3 5', interactive: false
-    }).addTo(messLayer);
-    const d = haversine(letzterPunkt[0], letzterPunkt[1], hier[0], hier[1]);
-    L.marker([(letzterPunkt[0] + hier[0]) / 2, (letzterPunkt[1] + hier[1]) / 2], {
-      interactive: false, keyboard: false,
-      icon: L.divIcon({ className: '', iconSize: null, iconAnchor: [-7, 7],
-        html: `<span class="mess-lbl mess-live">${esc(messText(d))}</span>` })
-    }).addTo(messLayer);
-  }
 
   if (messPunkte.length > 1) {
     L.polyline(messPunkte, {
@@ -2064,14 +2108,13 @@ function messLeiste() {
     </div>
     <p class="bb-coord">${messPunkte.length > 1 ? esc(messText(laenge)) : '—'}</p>
     <p class="bb-note plain">${esc(zeilen[0])}</p>
+    <p class="bb-note plain" id="messLive"></p>
     ${wahl}
     ${kd ? `<p class="bb-note plain">Nach Kilometrierung ${esc(messText(kd.km * 1000))} — von km ${esc(fmtKm(kd.von))} bis km ${esc(fmtKm(kd.bis))} der Strecke ${esc(view.ref)}.</p>` : ''}
-    <div class="bb-actions">
-      <button type="button" id="messMitte">Kartenmitte setzen</button>
-      <button type="button" id="messHier"${ortAn() ? '' : ' disabled'}>Standort setzen</button>
-    </div>
-    <div class="bb-actions">
-      <button type="button" id="messZurueck">Punkt zurück</button>
+    <div class="bb-actions wrap">
+      <button type="button" id="messMitte">Mitte</button>
+      <button type="button" id="messHier"${ortAn() ? '' : ' disabled'}>Standort</button>
+      <button type="button" id="messZurueck">Zurück</button>
       <button type="button" id="messLeer">Leeren</button>
       <button type="button" id="messFertig">Fertig</button>
     </div>`;
@@ -2097,6 +2140,7 @@ function messLeiste() {
    * Karte lässt sich aber beliebig genau unter das feste Kreuz schieben. */
   const mitte = $('#messMitte');
   if (mitte) mitte.addEventListener('click', () => messTipp(map.getCenter()));
+  messLiveZeichnen();      // die laufende Zahl gehört sofort in die neue Leiste
 
   const hier = $('#messHier');
   if (hier) hier.addEventListener('click', () => {
@@ -2124,8 +2168,15 @@ function messStart() {
   messModus = true;
   messPunkte = [];
   messKandidaten = [];
+  messLetzterTipp = 0;
   map.closePopup();          // eine offene KML-Auskunft stört beim Messen
   if (!messLayer) messLayer = L.layerGroup().addTo(map);
+  if (!messLiveLayer) messLiveLayer = L.layerGroup().addTo(map);
+
+  /* Doppeltipp-Zoom aus, solange gemessen wird. Zwei Punkte schnell
+   * hintereinander gesetzt wertet Leaflet sonst als Doppeltipp: Es zoomt und
+   * verschluckt den zweiten Tipp — die Messung fehlt dann einen Punkt. */
+  if (map.doubleClickZoom) map.doubleClickZoom.disable();
   messZeichnen();
   messLeiste();
   liveLeiste();
@@ -2139,6 +2190,10 @@ function messEnde() {
   messPunkte = [];
   messKandidaten = [];
   if (messLayer) messLayer.clearLayers();
+  if (messLiveLayer) messLiveLayer.clearLayers();
+  messLiveLinie = null;
+  messLiveZeichnen();
+  if (map.doubleClickZoom) map.doubleClickZoom.enable();
   liveLeiste();
   syncButtons();
   renderBottom();      // zeigt wieder den vorherigen Punkt, falls es einen gibt
@@ -2146,9 +2201,23 @@ function messEnde() {
 
 function messTipp(latlng) {
   latlng = L.latLng(latlng);
+
+  /* Manche Geräte melden einen Tipp doppelt (nativ und über Leaflets
+   * Tipperkennung). Zwei Meldungen dicht hintereinander an nahezu derselben
+   * Stelle sind deshalb derselbe Tipp und nicht zwei Punkte. */
+  const jetzt = Date.now();
+  if (messPunkte.length && jetzt - messLetzterTipp < 350) {
+    const vor = messPunkte[messPunkte.length - 1];
+    const a = map.latLngToContainerPoint(latlng);
+    const b = map.latLngToContainerPoint(L.latLng(vor[0], vor[1]));
+    if (a.distanceTo(b) < 8) return;
+  }
+  messLetzterTipp = jetzt;
+
   const nah = messKandidatenFinden(latlng);
   messKandidaten = [{ name: 'Getippt', quelle: '', koord: [latlng.lat, latlng.lng], dist: 0 }, ...nah];
-  messWahl = nah.length ? 1 : 0;        // liegt etwas in der Nähe, darauf fangen
+  // Nur fangen, wenn der Punkt auch in Metern nah liegt — sonst bleibt die Tippstelle
+  messWahl = nah.length && nah[0].dist <= MESS_FANG_MAX_M ? 1 : 0;
   messPunkte.push(messKandidaten[messWahl].koord);
   messZeichnen();
   messLeiste();
@@ -2690,7 +2759,6 @@ function ortStop(nachricht) {
   if (btn) btn.classList.remove('busy', 'is-on');
   if (nachricht) toast(nachricht);
   liveLeiste();
-  if (messModus) messZeichnen();
   syncButtons();
 }
 
@@ -2725,7 +2793,6 @@ function ortNeu(pos) {
   }
 
   liveLeiste();
-  if (messModus) messZeichnen();
 }
 
 /** Rechtweisende Peilung von hier zu einem Ziel, in Grad. */
