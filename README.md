@@ -26,7 +26,10 @@ am Rechner und lässt sich als App auf den Startbildschirm legen.
   auf dem Gerät und sind auch offline wieder da (siehe unten).
 - **Eigener WMS-Layer** als Overlay, auch für zugangsgeschützte Dienste (siehe unten).
 - **Standort dauerhaft verfolgt** — ein Tipp auf den Standortknopf schaltet die Verfolgung ein, der
-  Punkt bleibt von allein aktuell. Darüber erscheint eine Zeile mit der Ortungsgenauigkeit, dem
+  Punkt bleibt von allein aktuell. Die Karte fährt dabei nur beim ersten Fix hin und bewegt sich
+  danach **nie von selbst**: Beim Zielen und Messen würde eine nachziehende Karte gegen die eigene
+  Hand arbeiten. Ein Tipp auf den Knopf holt die Karte zum Standort zurück, der nächste beendet die
+  Verfolgung. Darüber erscheint eine Zeile mit der Ortungsgenauigkeit, dem
   Abstand zum letzten Messpunkt und **Entfernung samt Richtungspfeil zum nächsten Objekt der
   geladenen KML-Dateien** — damit lassen sich Punkte im Gelände ablaufen.
 - **Messen** — Punkte auf der Karte antippen, die Luftlinie steht als Maßzahl an jedem Abschnitt

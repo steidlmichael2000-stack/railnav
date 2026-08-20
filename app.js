@@ -2735,7 +2735,21 @@ let ortLetzt = null;              // { lat, lon, genau }
 const ortAn = () => ortWatch != null;
 
 function locate() {
-  if (ortAn()) { ortStop('Standort wird nicht mehr verfolgt.'); return; }
+  if (ortAn()) {
+    /* Die Karte fährt nur, wenn man es verlangt. Steht der Punkt schon in der
+     * Mitte, war der Tipp als Abschalten gemeint — sonst holt er die Karte
+     * zurück, ohne die Verfolgung zu beenden. */
+    if (ortLetzt) {
+      const wo = map.latLngToContainerPoint([ortLetzt.lat, ortLetzt.lon]);
+      if (wo.distanceTo(map.getSize().divideBy(2)) > 40) {
+        map.setView([ortLetzt.lat, ortLetzt.lon], Math.max(map.getZoom(), 17));
+        toast('Karte auf den Standort gesetzt.');
+        return;
+      }
+    }
+    ortStop('Standort wird nicht mehr verfolgt.');
+    return;
+  }
   if (!navigator.geolocation) { toast('Standortbestimmung wird nicht unterstützt.'); return; }
   if (!window.isSecureContext) { toast('Standort geht nur über HTTPS.'); return; }
 
@@ -2785,11 +2799,14 @@ function ortNeu(pos) {
     radius: Math.max(accuracy || 0, 5), color: '#2f81f7', weight: 1, fillOpacity: 0.12, interactive: false
   }).addTo(meLayer);
 
+  /* Nur der erste Fix bewegt die Karte, und auch der nicht beim Messen. Jede
+   * weitere Meldung setzt bloß den Punkt um. Vorher zog die Karte nach, sobald
+   * der Standort aus dem Bild lief — beim Messen sprang damit die Bildmitte
+   * gegen die eigene Zielbewegung, und auch sonst rutschte die Karte immer
+   * wieder weg. Zurückholen tut der Standortknopf. */
   if (erste) {
-    map.setView([lat, lon], Math.max(map.getZoom(), 17));
+    if (!messModus) map.setView([lat, lon], Math.max(map.getZoom(), 17));
     toast(`Standort auf ±${nfM.format(accuracy || 0)} m genau.`);
-  } else if (!map.getBounds().pad(-0.2).contains([lat, lon])) {
-    map.panTo([lat, lon]);
   }
 
   liveLeiste();
