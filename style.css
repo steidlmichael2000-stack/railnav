@@ -250,6 +250,40 @@ body {
   100% { transform: translateX(350%); }
 }
 
+/* ---------- Live-Zeile beim Verfolgen des Standorts ---------- */
+
+.live {
+  width: min(640px, calc(100% - 2 * var(--gap)));
+  margin: 8px auto 0;
+  padding: 7px 12px;
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  background: var(--glass);
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+  font-size: .8rem;
+}
+.live .tag { flex: none; }
+.live-teil { display: inline-flex; align-items: baseline; gap: 6px; min-width: 0; }
+.live-teil b { font-weight: 650; font-variant-numeric: tabular-nums; }
+.live-teil small { color: var(--muted); font-size: .74rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.live-ziel { margin-left: auto; }
+.live-ziel svg { width: 17px; height: 17px; flex: none; fill: var(--accent); align-self: center; }
+
+/* Fadenkreuz in der Kartenmitte beim Messen */
+.mittekreuz {
+  position: fixed; left: 50%; top: 50%;
+  transform: translate(-50%, -50%);
+  width: 40px; height: 40px;
+  z-index: 440; pointer-events: none;
+}
+.mittekreuz svg {
+  width: 40px; height: 40px;
+  fill: none; stroke: var(--warn); stroke-width: 2; stroke-linecap: round;
+  filter: drop-shadow(0 0 2px var(--bg)) drop-shadow(0 0 3px var(--bg));
+}
+
 /* ---------- Verlauf beim Tippen ---------- */
 
 .suggest {
@@ -456,6 +490,9 @@ body {
   display: inline-flex; align-items: center; gap: 4px;
   font-size: .74rem; color: var(--muted); font-variant-numeric: tabular-nums;
 }
+
+/* Die laufende Zahl zum Standort steht schwächer als die festen Abschnitte */
+.mess-lbl.mess-live { opacity: .85; font-weight: 600; }
 
 /* Maßzahl an der gemessenen Strecke */
 .mess-lbl {

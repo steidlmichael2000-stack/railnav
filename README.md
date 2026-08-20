@@ -25,6 +25,10 @@ am Rechner und lässt sich als App auf den Startbildschirm legen.
   in einer Ebenenliste, mit wählbarer Farbe, wählbarem Symbol und Namen auf der Karte. Sie bleiben
   auf dem Gerät und sind auch offline wieder da (siehe unten).
 - **Eigener WMS-Layer** als Overlay, auch für zugangsgeschützte Dienste (siehe unten).
+- **Standort dauerhaft verfolgt** — ein Tipp auf den Standortknopf schaltet die Verfolgung ein, der
+  Punkt bleibt von allein aktuell. Darüber erscheint eine Zeile mit der Ortungsgenauigkeit, dem
+  Abstand zum letzten Messpunkt und **Entfernung samt Richtungspfeil zum nächsten Objekt der
+  geladenen KML-Dateien** — damit lassen sich Punkte im Gelände ablaufen.
 - **Messen** — Punkte auf der Karte antippen, die Luftlinie steht als Maßzahl an jedem Abschnitt
   und als Summe in der Leiste. Liegen Anfang und Ende auf der geladenen Strecke, steht die
   Differenz **nach Kilometrierung** daneben; die Abweichung zwischen beiden Zahlen zeigt gleich,
@@ -49,6 +53,12 @@ KML-Dateien werden dabei gefangen** — bei einem KML-Punkt auf seine genaue Koo
 Linie oder Fläche auf den nächstgelegenen Stützpunkt; die Sprechblase mit den Merkmalen bleibt
 solange weg. Gerechnet wird ohne Netzabfrage im Browser; die Länge entlang des Gleises bleibt der
 Feinrechnung in der Richtung km → Position vorbehalten.
+
+Für Maße, die genau sein müssen, gibt es zwei Wege statt des Fingers: **Kartenmitte setzen** legt
+den Punkt auf das feste Fadenkreuz in der Bildmitte — die Karte lässt sich beliebig genau darunter
+schieben —, und **Standort setzen** übernimmt die eigene Position. Läuft die Standortverfolgung,
+zeigt eine gestrichelte Linie samt Maßzahl laufend den Abstand vom letzten Messpunkt zum eigenen
+Standort. „Genau 20 m von diesem Punkt" wird damit zur Laufaufgabe: hingehen, bis die Zahl stimmt.
 
 **Zoomknöpfe gibt es nicht** — am Rechner zoomt das Mausrad, am Gerät zwei Finger oder ein
 Doppeltipp. Der Platz rechts unten gehört den drei eigenen Knöpfen: Messen, Ablesen, Standort.

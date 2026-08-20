@@ -705,6 +705,7 @@ function initMap() {
   if (prefs.wms && prefs.wms.on) wmsApply(true);
 
   map.on('click', onMapClick);
+  map.on('moveend rotateend', liveLeiste);
   map.on('zoomend', drawMilestones);
   map.on('rotate rotateend', syncNorth);
   syncNorth();
@@ -1989,6 +1990,22 @@ function messZeichnen() {
   if (!messLayer) return;
   messLayer.clearLayers();
 
+  /* Vom letzten Punkt zum eigenen Standort: So wird „genau 20 m von hier" zur
+   * Laufaufgabe — hingehen, bis die Zahl stimmt. */
+  if (messModus && ortLetzt && messPunkte.length) {
+    const letzterPunkt = messPunkte[messPunkte.length - 1];
+    const hier = [ortLetzt.lat, ortLetzt.lon];
+    L.polyline([letzterPunkt, hier], {
+      color: MESS_FARBE, weight: 2, opacity: 0.7, dashArray: '3 5', interactive: false
+    }).addTo(messLayer);
+    const d = haversine(letzterPunkt[0], letzterPunkt[1], hier[0], hier[1]);
+    L.marker([(letzterPunkt[0] + hier[0]) / 2, (letzterPunkt[1] + hier[1]) / 2], {
+      interactive: false, keyboard: false,
+      icon: L.divIcon({ className: '', iconSize: null, iconAnchor: [-7, 7],
+        html: `<span class="mess-lbl mess-live">${esc(messText(d))}</span>` })
+    }).addTo(messLayer);
+  }
+
   if (messPunkte.length > 1) {
     L.polyline(messPunkte, {
       color: MESS_FARBE, weight: 3, opacity: 0.95, dashArray: '7 5', interactive: false
@@ -2050,6 +2067,10 @@ function messLeiste() {
     ${wahl}
     ${kd ? `<p class="bb-note plain">Nach Kilometrierung ${esc(messText(kd.km * 1000))} — von km ${esc(fmtKm(kd.von))} bis km ${esc(fmtKm(kd.bis))} der Strecke ${esc(view.ref)}.</p>` : ''}
     <div class="bb-actions">
+      <button type="button" id="messMitte">Kartenmitte setzen</button>
+      <button type="button" id="messHier"${ortAn() ? '' : ' disabled'}>Standort setzen</button>
+    </div>
+    <div class="bb-actions">
       <button type="button" id="messZurueck">Punkt zurück</button>
       <button type="button" id="messLeer">Leeren</button>
       <button type="button" id="messFertig">Fertig</button>
@@ -2072,6 +2093,17 @@ function messLeiste() {
     messLeiste();
   });
 
+  /* Die Kartenmitte als Punkt: Auf dem Handy trifft der Finger keine 20 cm, die
+   * Karte lässt sich aber beliebig genau unter das feste Kreuz schieben. */
+  const mitte = $('#messMitte');
+  if (mitte) mitte.addEventListener('click', () => messTipp(map.getCenter()));
+
+  const hier = $('#messHier');
+  if (hier) hier.addEventListener('click', () => {
+    if (!ortLetzt) { toast('Erst den Standort verfolgen lassen.'); return; }
+    messTipp(L.latLng(ortLetzt.lat, ortLetzt.lon));
+  });
+
   // Umschalten zwischen Tippstelle und den Fangpunkten in der Nähe
   b.querySelectorAll('[data-mw]').forEach(btn => btn.addEventListener('click', () => {
     const i = Number(btn.dataset.mw);
@@ -2080,6 +2112,7 @@ function messLeiste() {
     messPunkte[messPunkte.length - 1] = messKandidaten[i].koord;
     messZeichnen();
     messLeiste();
+    liveLeiste();
   }));
   const fertig = $('#messFertig');
   if (fertig) fertig.addEventListener('click', messEnde);
@@ -2095,6 +2128,7 @@ function messStart() {
   if (!messLayer) messLayer = L.layerGroup().addTo(map);
   messZeichnen();
   messLeiste();
+  liveLeiste();
   closeSheet();
   syncButtons();
   toast('Messen: auf die Karte tippen. Kilometersteine und KML-Punkte werden gefangen.');
@@ -2105,11 +2139,13 @@ function messEnde() {
   messPunkte = [];
   messKandidaten = [];
   if (messLayer) messLayer.clearLayers();
+  liveLeiste();
   syncButtons();
   renderBottom();      // zeigt wieder den vorherigen Punkt, falls es einen gibt
 }
 
 function messTipp(latlng) {
+  latlng = L.latLng(latlng);
   const nah = messKandidatenFinden(latlng);
   messKandidaten = [{ name: 'Getippt', quelle: '', koord: [latlng.lat, latlng.lng], dist: 0 }, ...nah];
   messWahl = nah.length ? 1 : 0;        // liegt etwas in der Nähe, darauf fangen
@@ -2615,27 +2651,138 @@ async function runFacility() {
 
 /* ============================ Standort ============================ */
 
+/* Der Standort wird dauerhaft verfolgt, nicht einmal abgefragt: Im Gelände geht
+ * es darum, zu einem Punkt hinzulaufen, und dafür muss die Anzeige mitlaufen,
+ * ohne dass man ständig den Knopf drückt. watchPosition liefert dabei jede neue
+ * Messung des Geräts.
+ *
+ * Die Karte springt nur beim ersten Fix zum Standort. Danach wird nur
+ * nachgeschoben, wenn der Punkt aus dem Bild läuft — sonst kämpft das Nachfahren
+ * gegen jedes Verschieben von Hand. */
+
+let ortWatch = null;
+let ortLetzt = null;              // { lat, lon, genau }
+
+const ortAn = () => ortWatch != null;
+
 function locate() {
-  const btn = $('#mapLocBtn');
+  if (ortAn()) { ortStop('Standort wird nicht mehr verfolgt.'); return; }
   if (!navigator.geolocation) { toast('Standortbestimmung wird nicht unterstützt.'); return; }
   if (!window.isSecureContext) { toast('Standort geht nur über HTTPS.'); return; }
+
   closeSheet();
+  const btn = $('#mapLocBtn');
   if (btn) btn.classList.add('busy');
-  toast('Standort wird ermittelt …');
-  navigator.geolocation.getCurrentPosition(pos => {
-    if (btn) { btn.classList.remove('busy'); btn.classList.add('is-on'); }
-    const { latitude: lat, longitude: lon, accuracy } = pos.coords;
-    meLayer.clearLayers();
-    L.marker([lat, lon], {
-      icon: L.divIcon({ className: '', html: '<div class="me-dot"></div>', iconSize: [16, 16], iconAnchor: [8, 8] })
-    }).addTo(meLayer);
-    L.circle([lat, lon], { radius: Math.max(accuracy || 0, 5), color: '#2f81f7', weight: 1, fillOpacity: 0.12 }).addTo(meLayer);
-    map.setView([lat, lon], 16);
-    toast(`Standort auf ±${nfM.format(accuracy || 0)} m genau — auf die Strecke tippen für den Kilometer.`);
-  }, err => {
-    if (btn) btn.classList.remove('busy', 'is-on');
-    toast('Standort nicht verfügbar: ' + (err.message || 'unbekannt'));
-  }, { enableHighAccuracy: true, timeout: 15000, maximumAge: 10000 });
+  toast('Standort wird verfolgt — der Punkt bleibt von allein aktuell.');
+
+  ortWatch = navigator.geolocation.watchPosition(ortNeu, ortFehler, {
+    enableHighAccuracy: true, maximumAge: 2000, timeout: 25000
+  });
+  syncButtons();
+}
+
+function ortStop(nachricht) {
+  if (ortWatch != null) navigator.geolocation.clearWatch(ortWatch);
+  ortWatch = null;
+  ortLetzt = null;
+  if (meLayer) meLayer.clearLayers();
+  const btn = $('#mapLocBtn');
+  if (btn) btn.classList.remove('busy', 'is-on');
+  if (nachricht) toast(nachricht);
+  liveLeiste();
+  if (messModus) messZeichnen();
+  syncButtons();
+}
+
+function ortFehler(err) {
+  const btn = $('#mapLocBtn');
+  if (btn) btn.classList.remove('busy');
+  // Einzelne Aussetzer sind unterwegs normal — erst aufgeben, wenn es nie geklappt hat
+  if (!ortLetzt) ortStop('Standort nicht verfügbar: ' + (err.message || 'unbekannt'));
+}
+
+function ortNeu(pos) {
+  const { latitude: lat, longitude: lon, accuracy } = pos.coords;
+  const erste = !ortLetzt;
+  ortLetzt = { lat, lon, genau: accuracy || 0 };
+
+  const btn = $('#mapLocBtn');
+  if (btn) { btn.classList.remove('busy'); btn.classList.add('is-on'); }
+
+  meLayer.clearLayers();
+  L.marker([lat, lon], {
+    icon: L.divIcon({ className: '', html: '<div class="me-dot"></div>', iconSize: [16, 16], iconAnchor: [8, 8] })
+  }).addTo(meLayer);
+  L.circle([lat, lon], {
+    radius: Math.max(accuracy || 0, 5), color: '#2f81f7', weight: 1, fillOpacity: 0.12, interactive: false
+  }).addTo(meLayer);
+
+  if (erste) {
+    map.setView([lat, lon], Math.max(map.getZoom(), 17));
+    toast(`Standort auf ±${nfM.format(accuracy || 0)} m genau.`);
+  } else if (!map.getBounds().pad(-0.2).contains([lat, lon])) {
+    map.panTo([lat, lon]);
+  }
+
+  liveLeiste();
+  if (messModus) messZeichnen();
+}
+
+/** Rechtweisende Peilung von hier zu einem Ziel, in Grad. */
+function ortPeilung(von, ziel) {
+  const rad = Math.PI / 180;
+  const dLon = (ziel[1] - von.lon) * rad;
+  const y = Math.sin(dLon) * Math.cos(ziel[0] * rad);
+  const x = Math.cos(von.lat * rad) * Math.sin(ziel[0] * rad) -
+            Math.sin(von.lat * rad) * Math.cos(ziel[0] * rad) * Math.cos(dLon);
+  return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+}
+
+/** Nächstes Objekt aus sichtbaren KML-Dateien — das Ziel beim Suchen im Gelände. */
+function ortNaechstesObjekt() {
+  if (!ortLetzt) return null;
+  let best = null;
+  for (const a of kmlAkten) {
+    if (!a.sichtbar) continue;
+    for (const o of a.objekte) {
+      const k = kmlAnker(o);
+      if (!k) continue;
+      const d = haversine(ortLetzt.lat, ortLetzt.lon, k[0], k[1]);
+      if (!best || d < best.d) best = { d, koord: k, name: o.name || '(ohne Namen)', datei: a.name };
+    }
+  }
+  return best;
+}
+
+/* Schmale Zeile unter der Suchleiste, nur solange verfolgt wird: Genauigkeit,
+ * Abstand zum letzten Messpunkt und das nächste KML-Objekt mit Richtungspfeil.
+ * Der Pfeil rechnet die Kartendrehung heraus, zeigt also auf dem Schirm dorthin,
+ * wo das Ziel wirklich liegt. */
+function liveLeiste() {
+  const el = $('#live');
+  if (!el) return;
+  if (!ortLetzt) { el.hidden = true; el.innerHTML = ''; updateBH(); return; }
+
+  const stuecke = [`<span class="tag">±${nfM.format(ortLetzt.genau)} m</span>`];
+
+  if (messModus && messPunkte.length) {
+    const p = messPunkte[messPunkte.length - 1];
+    stuecke.push(`<span class="live-teil"><b>${esc(messText(haversine(ortLetzt.lat, ortLetzt.lon, p[0], p[1])))}</b>` +
+      `<small>vom letzten Messpunkt</small></span>`);
+  }
+
+  const nah = ortNaechstesObjekt();
+  if (nah) {
+    const dreh = ortPeilung(ortLetzt, nah.koord) - (map.getBearing ? map.getBearing() : 0);
+    stuecke.push(`<span class="live-teil live-ziel">` +
+      `<svg viewBox="0 0 24 24" aria-hidden="true" style="transform:rotate(${dreh.toFixed(1)}deg)">` +
+      `<path d="M12 3l6 16-6-4-6 4z"/></svg>` +
+      `<b>${esc(messText(nah.d))}</b><small>${esc(nah.name)}</small></span>`);
+  }
+
+  el.innerHTML = stuecke.join('');
+  el.hidden = false;
+  updateBH();
 }
 
 /* ============================ Verlauf ============================ */
@@ -2715,6 +2862,9 @@ function syncButtons() {
       if (btn) btn.classList.toggle('is-on', map.hasLayer(layer));
     }
   }
+
+  const kreuz = $('#mitteKreuz');
+  if (kreuz) kreuz.hidden = !messModus;
 
   const mb = $('#mapMessBtn');
   if (mb) {
