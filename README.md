@@ -289,9 +289,21 @@ eine Datei ein Merkmal, dessen Name nach Typ aussieht, ist das beim Öffnen glei
 sonst liegt alles einheitlich als Kreis. Dieselben Merkmale lassen sich in die Beschriftung
 aufnehmen, etwa `5062AA00001 · PS2`.
 
+**Einzelne Merkmalswerte aus- und einblenden.** Unter *Sichtbar* steht jeder Wert des gewählten
+Merkmals mit seiner Häufigkeit — ein Tipp nimmt ihn aus der Karte. Aus einer Datei mit 61 Objekten
+werden so etwa nur die 36 Neubau-Querungen gezeigt; die Zeile in der Liste sagt dann „59 von 61
+Objekten". Ausgeblendetes wird auch nicht beschriftet, nicht beim Messen gefangen und nicht als
+nächstes Objekt gemeldet. Der Zustand bleibt gespeichert.
+
 **Namen auf der Karte** erscheinen ab Zoomstufe 16 und höchstens 200 auf einmal, jeweils nur was
 im Bild liegt. Ohne diese Grenzen hängen bei einer Datei mit tausend Punkten tausend Textknoten in
 der Karte, und lesbar ist davon nichts.
+
+Beschreibungen werden vor dem Auswerten an `<br>` und Absatzenden umgebrochen — `textContent` kennt
+kein `<br>`, sonst lief ein ganzer Beschreibungsblock zu einer einzigen Zeile zusammen und die
+Merkmale darin waren nicht mehr zu erkennen. Führt eine Datei dieselben Felder in `ExtendedData`
+*und* in der Beschreibung, werden sie zusammengelegt; bei gleichem Schlüssel gewinnt der längere
+Wert.
 
 Gelesen werden `Point`, `LineString`, `LinearRing`, `Polygon` (auch mit Löchern), `MultiGeometry`
 und `gx:Track`, dazu `Style` und `StyleMap` (Zustand *normal*) mit Linienfarbe, Linienstärke und
@@ -312,8 +324,11 @@ mehr zu parsen ist. Kopfdaten (Name, Farbe, sichtbar) und Geometrie liegen in ge
 das Ein- und Ausschalten schreibt damit ein paar Byte statt der ganzen Datei. Die Dateien liegen
 auf dem Gerät und sind auch ohne Netz wieder da; hochgeladen wird nichts.
 
-Die Objekte liegen in einer eigenen Leaflet-Pane mit `z-index` 350: über den Kartenkacheln, aber
-unter den Kilometersteinen der App. Ein Tipp auf ein KML-Objekt löst die Kilometersuche nicht mit
+Punktsymbole und Namen liegen in einer eigenen Leaflet-Pane über allen Markern; Linien und Flächen
+gehen dagegen bewusst in Leaflets normale Vektorebene. Für eine eigene Pane legt Leaflet einen
+zweiten SVG-Renderer an, und genau den kennzeichnet leaflet-rotate im eigenen Quelltext mit einem
+FIXME zum Verrutschen beim Zoomen — die Standardebene trägt dagegen seit Monaten die Steinlinie der
+App ohne Versatz. Ein Tipp auf ein KML-Objekt löst die Kilometersuche nicht mit
 aus, sondern zeigt nur die Sprechblase.
 
 ## Grenzen

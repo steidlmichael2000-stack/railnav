@@ -495,6 +495,7 @@ body {
 
 /* Legende: welcher Merkmalswert traegt welche Form */
 .kml-legende { display: flex; flex-wrap: wrap; gap: 4px 10px; }
+.kml-mehr { align-self: center; font-size: .72rem; color: var(--muted-2); }
 .kml-legende span {
   display: inline-flex; align-items: center; gap: 4px;
   font-size: .74rem; color: var(--muted); font-variant-numeric: tabular-nums;

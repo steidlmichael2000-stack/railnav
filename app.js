@@ -633,23 +633,32 @@ function initMap() {
     bearing: 0
   }).setView([51.1, 10.3], 6);
 
-  /* Zwei eigene Ebenen für KML-Dateien, und die müssen im richtigen Elternteil
-   * hängen: leaflet-rotate teilt die Panes auf. Kacheln und Vektoren liegen unter
-   * rotatePane, Marker und Sprechblasen unter norotatePane, und der gepatchte
-   * SVG-Renderer rechnet in rotatePane-Koordinaten. Eine Pane direkt unter
-   * mapPane sieht erst richtig aus und verschiebt sich dann beim Zoomen einer
-   * gedrehten Karte — gemessen 36/-78 px nach einem Zoomschritt bei 30 Grad,
-   * und der Versatz bleibt. Genau das waren die Punkte, die "komisch springen". */
-  map.createPane('kmlPane', map._rotatePane || undefined);
-  map.getPane('kmlPane').style.zIndex = 450;        // über Kacheln und eigener Linie
+  /* Eigene Ebene nur für Punktsymbole und Namen, und die hängt unter
+   * norotatePane — dort, wo Leaflet selbst seine Marker führt. Eine Pane direkt
+   * unter mapPane sah erst richtig aus und verschob sich dann beim Zoomen einer
+   * gedrehten Karte (gemessen 36/-78 px), weil leaflet-rotate die Panes aufteilt.
+   *
+   * Linien und Flächen aus KML gehen bewusst in Leaflets normale Vektorebene
+   * (overlayPane) und nicht in eine eigene: Für eine eigene Pane legt Leaflet
+   * einen zweiten SVG-Renderer an, und genau den kennzeichnet leaflet-rotate im
+   * eigenen Quelltext mit einem FIXME zum Verrutschen beim Zoomen. Die
+   * Standardebene trägt seit Monaten die Steinlinie der App ohne Versatz. */
   map.createPane('kmlIconPane', map._norotatePane || undefined);
   map.getPane('kmlIconPane').style.zIndex = 620;    // über allen Markern, unter Sprechblasen
 
+  /* maxZoom gegen maxNativeZoom: maxZoom heißt bei einer Kachelebene „darüber
+   * gar nicht mehr zeichnen" — die Ebene verschwindet dann ganz. maxNativeZoom
+   * heißt „ab hier die letzte vorhandene Kachel hochskalieren", sie bleibt also
+   * sichtbar, nur unscharf. Vorher stand bei OSM und Bahn-Layer maxZoom 19:
+   * Wer über einen WMS-Hintergrund (maxZoom 22) tiefer hineinzoomte und dann
+   * zurück auf Karte oder Luftbild schaltete, saß auf weißem Grund. Dasselbe
+   * hatten wir schon beim eigenen WMS-Layer. */
   baseOsm = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+    maxZoom: 22, maxNativeZoom: 19,
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
   });
   baseSat = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
-    maxZoom: 19, maxNativeZoom: 18, attribution: 'Luftbild: Esri, Maxar'
+    maxZoom: 22, maxNativeZoom: 18, attribution: 'Luftbild: Esri, Maxar'
   });
 
   /* Offene Dienste der Bayerischen Vermessungsverwaltung, alle CC BY 4.0 und mit
@@ -683,7 +692,7 @@ function initMap() {
 
   baseLayers = { osm: baseOsm, sat: baseSat, dop: baseDop, relief: baseRelief };
   ormLayer = L.tileLayer('https://{s}.tiles.openrailwaymap.org/standard/{z}/{x}/{y}.png', {
-    subdomains: 'abc', maxZoom: 19, maxNativeZoom: 19, opacity: 0.85,
+    subdomains: 'abc', maxZoom: 22, maxNativeZoom: 19, opacity: 0.85,
     attribution: '<a href="https://www.openrailwaymap.org/">OpenRailwayMap</a>'
   });
 
@@ -1076,6 +1085,33 @@ function kmlFormKarte(akte) {
   return karte;
 }
 
+/** Werte eines Merkmals mit ihrer Häufigkeit, numerisch sinnvoll sortiert. */
+function kmlWerteMit(akte, feld) {
+  if (!feld) return [];
+  const zaehler = new Map();
+  for (const o of akte.objekte) {
+    const v = kmlWert(o, feld);
+    if (v == null || v === '') continue;
+    zaehler.set(v, (zaehler.get(v) || 0) + 1);
+  }
+  return [...zaehler].map(([wert, anzahl]) => ({ wert, anzahl })).sort((a, b) => {
+    const za = parseFloat(a.wert), zb = parseFloat(b.wert);
+    if (isFinite(za) && isFinite(zb) && za !== zb) return za - zb;
+    return String(a.wert).localeCompare(String(b.wert), 'de');
+  });
+}
+
+/* Soll dieses Objekt gezeichnet werden? Ausgeblendet wird nach Werten eines
+ * Merkmals — etwa nur die Neubau-Querungen zeigen und die vorhandenen weglassen.
+ * Gilt überall gleich: Zeichnen, Beschriftung, Fangen beim Messen und die Suche
+ * nach dem nächsten Objekt. */
+function kmlSichtbarObj(akte, o) {
+  const aus = akte.ausWerte;
+  if (!aus || !aus.length || !akte.autoFeld) return true;
+  const v = kmlWert(o, akte.autoFeld);
+  return !aus.includes(v == null ? '' : v);
+}
+
 /** Was auf der Karte neben dem Symbol steht. */
 function kmlLabelText(akte, o) {
   const teile = [];
@@ -1267,6 +1303,13 @@ function kmlKlartext(roh) {
   t = t.replace(/^<!\[CDATA\[/, '').replace(/\]\]>\s*$/, '').trim();
   if (!t) return '';
   if (!/[<&]/.test(t)) return t;
+
+  /* Zeilenwechsel des HTML erhalten. textContent kennt kein <br>, sonst liefen
+   * ganze Beschreibungsblöcke zu einer einzigen Zeile zusammen — unlesbar, und
+   * die Merkmale "Schlüssel: Wert" darin wären nicht mehr zu erkennen. */
+  t = t.replace(/<br\s*\/?>/gi, '\n')
+       .replace(/<\/(p|div|tr|li|h[1-6])\s*>/gi, '\n');
+
   const d = new DOMParser().parseFromString(t, 'text/html');
   return (d.body.textContent || '').replace(/[ \t]+/g, ' ').replace(/\n\s*\n+/g, '\n').trim();
 }
@@ -1321,6 +1364,21 @@ function kmlOrdner(pm) {
   return teile.join(' › ');
 }
 
+/* Merkmale aus ExtendedData und aus der Beschreibung zusammenlegen. Manche
+ * Dateien führen dieselben Felder in beidem — dann steht sonst alles doppelt in
+ * der Sprechblase. Bei gleichem Schlüssel gewinnt der längere Wert: In der
+ * Beschreibung steht oft die ausführlichere Fassung. */
+function kmlDatenVereinen(...listen) {
+  const raus = new Map();
+  for (const liste of listen) {
+    for (const [k, v] of liste) {
+      const alt = raus.get(k);
+      if (alt == null || String(v).length > String(alt).length) raus.set(k, v);
+    }
+  }
+  return [...raus].slice(0, 20);
+}
+
 function kmlParse(xmlText) {
   const doc = new DOMParser().parseFromString(xmlText, 'application/xml');
   if (doc.getElementsByTagName('parsererror').length) throw new Error('kein lesbares KML');
@@ -1371,7 +1429,7 @@ function kmlParse(xmlText) {
     const gemeinsam = {
       name: nEl ? nEl.textContent.trim() : '',
       text: zerlegt.rest.slice(0, 700),
-      daten: [...kmlDaten(pm), ...zerlegt.paare].slice(0, 20),
+      daten: kmlDatenVereinen(kmlDaten(pm), zerlegt.paare),
       ordner: kmlOrdner(pm),
       stil: eigen ? kmlStil(eigen) : stilFuer(kmlText(pm, 'styleUrl'))
     };
@@ -1473,12 +1531,12 @@ function kmlEbene(akte) {
   const autoKarte = form === 'auto' ? kmlFormKarte(akte) : null;
 
   for (const o of akte.objekte) {
+    if (!kmlSichtbarObj(akte, o)) continue;
     const s = o.stil || {};
     // Selbst gewählte Farbe schlägt die Angabe in der Datei — sonst hätte das
     // Auswählen bei Dateien mit eigenem Stil keine Wirkung
     const farbe = akte.farbeFest ? grund : (s.color || grund);
     const basis = {
-      pane: 'kmlPane',
       color: farbe,
       weight: s.weight || (o.art === 'a' ? 2 : 3),
       opacity: s.opacity == null ? 0.95 : s.opacity,
@@ -1564,6 +1622,7 @@ function kmlLabels() {
   for (const a of kmlAkten) {
     if (!a.sichtbar) continue;
     for (const o of a.objekte) {
+      if (!kmlSichtbarObj(a, o)) continue;
       const txt = kmlLabelText(a, o);
       if (!txt) continue;
       const wo = kmlAnker(o);
@@ -1605,12 +1664,16 @@ function kmlListe() {
   if (!box) return;
 
   box.innerHTML = kmlAkten.map((a, i) => {
-    const unter = [nfM.format(a.anzahl || a.objekte.length) + ' Objekte', kmlGroesse(a.groesse), a.titel]
-      .filter(Boolean).join(' · ');
+    const gezeigt = a.objekte.filter(o => kmlSichtbarObj(a, o)).length;
+    const zahl = gezeigt === a.objekte.length
+      ? nfM.format(a.objekte.length) + ' Objekte'
+      : nfM.format(gezeigt) + ' von ' + nfM.format(a.objekte.length) + ' Objekten';
+    const unter = [zahl, kmlGroesse(a.groesse), a.titel].filter(Boolean).join(' · ');
     const form = a.symbol || 'kreis';
     const felder = kmlFelder(a);
     const autoMoeglich = kmlAutoFeld(a) != null;
     const autoKarte = form === 'auto' ? kmlFormKarte(a) : null;
+    const werte = kmlWerteMit(a, a.autoFeld);
     const labelFelder = a.labelFelder || ['name'];
     const zeigeSymbol = form === 'auto' ? (a.autoFeld ? 'auto' : 'kreis') : form;
     return `<div class="kml-zeile">
@@ -1647,13 +1710,20 @@ function kmlListe() {
             `<button class="kml-form${k === form ? ' is-on' : ''}" type="button" data-kform="${i}"
                      data-wert="${k}" aria-label="${f.name}" title="${f.name}">${kmlSymbolSvg(k, esc(a.farbe), true)}</button>`).join('')}
         </div>
-        ${form === 'auto' ? `
-        <p class="kml-lab">Unterschieden nach</p>
-        <div class="kml-wahl">${felder.filter(f => f.werte >= 2 && f.werte <= Object.keys(KML_FORMEN).length).map(f =>
+        ${felder.length ? `
+        <p class="kml-lab">Merkmal</p>
+        <div class="kml-wahl">${felder.filter(f => f.werte >= 2 && f.werte <= 30).map(f =>
           `<button class="kml-feld${f.key === a.autoFeld ? ' is-on' : ''}" type="button" data-kauto="${i}"
-                   data-wert="${esc(f.key)}">${esc(f.key)} <small>${f.werte}</small></button>`).join('')}</div>
-        <div class="kml-legende">${autoKarte ? [...autoKarte].map(([wert, k]) =>
-          `<span>${kmlSymbolSvg(k, esc(a.farbe), false)}${esc(wert)}</span>`).join('') : ''}</div>` : ''}
+                   data-wert="${esc(f.key)}">${esc(f.key)} <small>${f.werte}</small></button>`).join('')}</div>` : ''}
+        ${form === 'auto' && autoKarte ? `
+        <div class="kml-legende">${[...autoKarte].map(([wert, k]) =>
+          `<span>${kmlSymbolSvg(k, esc(a.farbe), false)}${esc(wert)}</span>`).join('')}</div>` : ''}
+        ${werte.length > 1 ? `
+        <p class="kml-lab">Sichtbar</p>
+        <div class="kml-wahl">${werte.slice(0, 14).map(w =>
+          `<button class="kml-feld${(a.ausWerte || []).includes(w.wert) ? '' : ' is-on'}" type="button"
+                   data-kfilter="${i}" data-wert="${esc(w.wert)}">${esc(w.wert)} <small>${w.anzahl}</small></button>`).join('')}
+          ${werte.length > 14 ? `<span class="kml-mehr">+${werte.length - 14} weitere</span>` : ''}</div>` : ''}
 
         <p class="kml-lab">Beschriftung</p>
         <div class="kml-wahl">
@@ -1712,7 +1782,15 @@ function kmlListe() {
 
   box.querySelectorAll('[data-kauto]').forEach(btn => btn.addEventListener('click', () =>
     // autoFeldFest: eine bewusste Wahl soll ein späterer Standardwechsel nicht umwerfen
-    stilGesetzt(Number(btn.dataset.kauto), { autoFeld: btn.dataset.wert, autoFeldFest: true })));
+    stilGesetzt(Number(btn.dataset.kauto), { autoFeld: btn.dataset.wert, autoFeldFest: true, ausWerte: [] })));
+
+  box.querySelectorAll('[data-kfilter]').forEach(btn => btn.addEventListener('click', () => {
+    const i = Number(btn.dataset.kfilter), a = kmlAkten[i];
+    if (!a) return;
+    const wert = btn.dataset.wert;
+    const aus = a.ausWerte || [];
+    stilGesetzt(i, { ausWerte: aus.includes(wert) ? aus.filter(x => x !== wert) : [...aus, wert] });
+  }));
 
   box.querySelectorAll('[data-klabel]').forEach(btn => btn.addEventListener('click', () => {
     const i = Number(btn.dataset.klabel), a = kmlAkten[i];
@@ -1976,6 +2054,7 @@ function messKandidatenFinden(latlng) {
   for (const a of kmlAkten) {
     if (!a.sichtbar) continue;
     for (const o of a.objekte) {
+      if (!kmlSichtbarObj(a, o)) continue;
       const k = kmlNaechsterKnoten(o, latlng);
       if (!k) continue;
       const d = haversine(latlng.lat, latlng.lng, k[0], k[1]);
@@ -2829,6 +2908,7 @@ function ortNaechstesObjekt() {
   for (const a of kmlAkten) {
     if (!a.sichtbar) continue;
     for (const o of a.objekte) {
+      if (!kmlSichtbarObj(a, o)) continue;
       const k = kmlAnker(o);
       if (!k) continue;
       const d = haversine(ortLetzt.lat, ortLetzt.lon, k[0], k[1]);
