@@ -324,11 +324,30 @@ mehr zu parsen ist. Kopfdaten (Name, Farbe, sichtbar) und Geometrie liegen in ge
 das Ein- und Ausschalten schreibt damit ein paar Byte statt der ganzen Datei. Die Dateien liegen
 auf dem Gerät und sind auch ohne Netz wieder da; hochgeladen wird nichts.
 
-Punktsymbole und Namen liegen in einer eigenen Leaflet-Pane über allen Markern; Linien und Flächen
-gehen dagegen bewusst in Leaflets normale Vektorebene. Für eine eigene Pane legt Leaflet einen
-zweiten SVG-Renderer an, und genau den kennzeichnet leaflet-rotate im eigenen Quelltext mit einem
-FIXME zum Verrutschen beim Zoomen — die Standardebene trägt dagegen seit Monaten die Steinlinie der
-App ohne Versatz. Ein Tipp auf ein KML-Objekt löst die Kilometersuche nicht mit
+Punktsymbole und Namen liegen in einer eigenen Leaflet-Pane über allen Markern, Linien und Flächen
+in Leaflets normaler Vektorebene.
+
+### Warum Linien beim Drehen und Zoomen sprangen
+
+Gemeldet als „wenn ich drehe und zoome, verspringt alles — aber nur die Linien". Zutreffend, und die
+Ursache liegt nicht bei den KML-Dateien: **leaflet-rotate zieht die SVG-Vektorebene während einer
+laufenden Zweifingergeste nicht mit.** Nachgemessen mit einer nachgebauten Geste (Pinch und Drehung
+gleichzeitig) und der Bildschirmmatrix des Pfades: Der Endpunkt einer Linie wanderte mitten in der
+Geste um bis zu **171 Pixel** und sprang am Ende zurück auf 0. Betroffen sind alle Vektoren gleich —
+in einer selbst angelegten Pane genauso wie in Leaflets eigener; Marker und Symbole bleiben ruhig,
+weil die einzeln gesetzt werden. Deshalb sah es aus, als sprängen nur die Linien.
+
+Zwei Messfehler von mir haben das lange verdeckt: Erst habe ich bei Linien `_parts` verglichen, also
+Leaflets *interne* Rechenpunkte — die stimmen auch dann, wenn der Container falsch transformiert
+ist. Dann habe ich die Mitte des Umschließungsrechtecks genommen, und die bleibt bei einer geraden
+Strecke selbst dann richtig, wenn die Linie falsch gedreht gezeichnet wird.
+
+Die Abhilfe: Der Renderer wird während der Geste **bei jedem Bild neu gesetzt**, dann bleibt alles
+auf 0 Pixel. Das kostet Rechenzeit — gemessen 0,6 ms bei den üblichen Dateien und bei 23 Linien,
+2 ms bei 200 Kreisen, aber 14 ms bei einer einzigen Linie mit 5000 Stützpunkten, was bei 60 Bildern
+je Sekunde zu viel wäre. Deshalb gilt ein Budget von 2500 Stützpunkten: darunter wird nachgezogen,
+darüber die Vektorebene für die Dauer der Geste ausgeblendet und danach einmal neu gesetzt.
+Verschwundene Linien irritieren weniger als umherfliegende. Ein Tipp auf ein KML-Objekt löst die Kilometersuche nicht mit
 aus, sondern zeigt nur die Sprechblase.
 
 ## Grenzen

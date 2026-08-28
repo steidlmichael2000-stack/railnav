@@ -714,12 +714,83 @@ function initMap() {
   if (prefs.wms && prefs.wms.on) wmsApply(true);
 
   map.on('click', onMapClick);
+  map.on('zoom rotate', gesteBild);
+  map.on('zoomend rotateend moveend', gesteEnde);
   map.on('move zoom rotate', messLiveZeichnen);
   map.on('moveend rotateend', liveLeiste);
   map.on('zoomend', drawMilestones);
   map.on('rotate rotateend', syncNorth);
   syncNorth();
   syncButtons();
+}
+
+/* ---- Vektoren während einer Zweifingergeste ----
+ *
+ * leaflet-rotate zieht die SVG-Vektorebene während einer laufenden Geste nicht
+ * mit: Gemessen wandern Linien und Kreise mitten im Drehen und Zoomen um bis zu
+ * 171 Pixel und springen am Ende zurück. Betroffen sind alle Vektoren gleich —
+ * in Leaflets eigener Ebene genauso wie in einer selbst angelegten; Marker und
+ * Symbole bleiben ruhig, weil die einzeln gesetzt werden. Deshalb sah es aus,
+ * als sprängen „nur die Linien".
+ *
+ * Ein erzwungenes Neusetzen des Renderers je Bild hält alles auf 0 Pixel. Es
+ * kostet aber Rechenzeit: gemessen 0,6 ms bei den üblichen Dateien (auch bei 23
+ * Linien), 2 ms bei 200 Kreisen, aber 14 ms bei einer einzigen Linie mit 5000
+ * Stützpunkten — das wäre bei 60 Bildern je Sekunde zu viel. Deshalb bis zu
+ * einem Budget nachziehen und darüber die Vektorebene für die Dauer der Geste
+ * ausblenden: Verschwundene Linien irritieren weniger als umherfliegende. */
+
+const VEKTOR_BUDGET = 2500;      // Stützpunkte, bis zu denen je Bild nachgezogen wird
+
+let gesteLaeuft = false;
+let gesteModus = null;
+
+function alleRenderer() {
+  const raus = [];
+  if (map._renderer) raus.push(map._renderer);
+  for (const r of Object.values(map._paneRenderers || {})) if (r) raus.push(r);
+  return raus;
+}
+
+function vektorLast() {
+  let n = 0;
+  for (const r of alleRenderer()) {
+    for (const id in (r._layers || {})) {
+      const l = r._layers[id];
+      /* Die eigenen Stützpunkte zählen, nicht l._parts: Dort stehen nur die
+       * zugeschnittenen Punkte des aktuellen Ausschnitts, und für eine gerade
+       * hinzugefügte Linie ist das Feld leer — die Last wäre unterschätzt. */
+      if (typeof l.getLatLngs === 'function') {
+        const ll = l.getLatLngs();
+        n += Array.isArray(ll[0]) ? ll.flat(2).length : ll.length;
+      } else {
+        n += 1;
+      }
+    }
+  }
+  return n;
+}
+
+function vektorenNachziehen() {
+  for (const r of alleRenderer()) {
+    try { r._reset(); } catch { /* ein Renderer ohne Karte — nichts zu tun */ }
+  }
+}
+
+function gesteBild() {
+  if (!gesteLaeuft) {
+    gesteLaeuft = true;
+    gesteModus = vektorLast() <= VEKTOR_BUDGET ? 'nachziehen' : 'ausblenden';
+    if (gesteModus === 'ausblenden') map.getPane('overlayPane').style.opacity = '0';
+  }
+  if (gesteModus === 'nachziehen') vektorenNachziehen();
+}
+
+function gesteEnde() {
+  if (!gesteLaeuft) return;
+  gesteLaeuft = false;
+  map.getPane('overlayPane').style.opacity = '';
+  vektorenNachziehen();
 }
 
 /** Nordknopf nur zeigen, wenn die Karte tatsächlich gedreht ist. */
