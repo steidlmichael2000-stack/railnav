@@ -454,6 +454,10 @@ OpenStreetMap. Gemessen am selben Punkt bei Bischofswiesen:
 | --- | --- | --- |
 | Strecke + Startwert bestimmen | 596 ms – 25 s (oft Fehlschlag) | **18 ms** |
 | Punkt in der 4,4-km-Lücke, mit Gleisverlauf | 11,5 s | **114 ms** |
+| „Punkt auf das Gleis rechnen" (km → Ort) | 15–40 s | **34 ms** |
+
+Am ausgelieferten Stand nachgeprüft, nicht nur lokal: derselbe Punkt über
+`steidlmichael2000-stack.github.io` in 231 ms, die 4,4-km-Lücke in 122 ms.
 
 ### Warum Linienzüge und keine fertigen Kilometerpunkte
 
@@ -463,11 +467,14 @@ Auskunft, nur teurer geschrieben: Die Stützpunkte aus OpenStreetMap stehen geme
 verteilt zu liegen. Ein Raster fester Punkte beantwortet außerdem die erste Frage nicht besser.
 Gerechnet mit echten Daten:
 
-| Ablage | Punkte | gzip, hochgerechnet |
+| Ablage | Punkte | gzip |
 | --- | --- | --- |
-| alle 10 m | 3,3 Mio. | rund 12 MB |
-| alle 100 m | 330.000 | rund 1,2 MB |
-| OSM-Stützpunkte, auf 5 m vereinfacht | rund 300.000 | **rund 1,5 MB** |
+| alle 10 m | 3,3 Mio. | rund 12 MB (hochgerechnet) |
+| alle 100 m | 330.000 | rund 1,2 MB (hochgerechnet) |
+| OSM-Stützpunkte, auf 5 m vereinfacht | **632.035** | **3,46 MB** (gebaut, nicht geschätzt) |
+
+Der gebaute Satz deckt dabei mehr ab als die Hochrechnungen: 89.355 km Gleis über Deutschland und
+die Grenzgebiete, nicht nur 33.000 km deutsches Streckennetz.
 
 ### Was in den Kacheln steht
 
@@ -477,6 +484,17 @@ Bahnhofsgleise — an einem dichten Ausschnitt im Ruhrgebiet gemessen 334 km sta
 einer reinen `ref`-Auswahl. Die zusätzlichen 238 Wege *ohne* Nummer sind genau die, die den
 Graphen an Bahnhöfen zusammenhalten. Dazu kommen alle Bahnknoten mit `railway:position` oder
 `railway:position:exact` als Startwert für die Kilometrierung.
+
+**Plus, was trotz `service`-Tag eine Streckennummer trägt.** Das fiel bei der Gegenprobe im
+Ruhrgebiet auf: Bei 51,467606 / 7,059896 bot Overpass die Strecke **2505** mit 22 m Abstand an
+(„ehem. Rheinische Bahn", `service=spur`), die Kachel kannte nur die 2163 mit 26 m. Eine Nummer
+ist eine Nummer, auch auf einem Anschlussgleis — und die ORM-API kennt deren Kilometrierung, die
+App könnte also antworten und tat es nur deshalb nicht, weil ihr das Gleis fehlte. Der Erzeuger
+holt diese Wege deshalb in einem zweiten, leichten Durchgang nach.
+
+Die beiden Durchgänge liegen getrennt im Zwischenspeicher, mit der Durchgangs-Marke im
+Dateinamen. Sonst hätte die Änderung am zweiten stillschweigend die alten Antworten des ersten
+weiterbenutzt — beim Nachrüsten genau diese Falle.
 
 Die Geometrie wird mit Douglas-Peucker auf 5 m vereinfacht — **aber nicht über Verzweigungen
 hinweg**. Zwei Gleise hängen in OpenStreetMap zusammen, indem sie sich einen Knoten teilen, und
@@ -497,9 +515,19 @@ Verfahrens selbst fällt das nicht ins Gewicht.
 ### Kacheln, Deckung und Rückfall
 
 Ein Raster von 0,5°, benannt `netz/t_<y>_<x>.json` mit `y = floor(lat/0,5)`. Eine Kachel deckt
-rund 55 × 55 km ab und wiegt in dünn besiedelter Gegend etwa 25 kB. `netz/index.json` führt, welche
-Zellen erzeugt wurden — mit Inhalt und leer, denn „hier liegt kein Gleis" ist eine Auskunft und
-kein fehlender Datensatz.
+rund 55 × 55 km ab. Ausgeliefert werden **340 Kacheln, davon 310 mit Inhalt und 30 nachweislich
+leer** — denn „hier liegt kein Gleis" ist eine Auskunft und kein fehlender Datensatz, und
+`netz/index.json` führt beides getrennt.
+
+Geholt wird immer nur, worauf man steht. Am Server gemessen:
+
+| Kachel | roh | über die Leitung |
+| --- | --- | --- |
+| `index.json` | 3,9 kB | 852 B |
+| `t_95_25` (Berchtesgaden) | 24,7 kB | 10,0 kB |
+| `t_102_13` (Ruhrgebiet, die größte) | 212 kB | 84 kB |
+
+Median über alle Kacheln: 20 kB roh.
 
 **Fehlt auch nur eine berührte Kachel, geht die Anfrage vollständig über Overpass.** Halb aus
 Kacheln und halb aus dem Netz zu antworten hieße, stillschweigend Gleise zu verlieren. Overpass
