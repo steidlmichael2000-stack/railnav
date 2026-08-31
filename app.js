@@ -452,6 +452,137 @@ function projectOnLine(sorted, lat, lon, maxGap = MAX_DRAW_GAP_KM) {
   return best;
 }
 
+/* ============================ Mitgeliefertes Netz ============================ */
+
+/* Zwei Fragen brauchten bisher zwingend Overpass: „welche Strecke liegt hier"
+ * und „wie verläuft das Gleis zwischen diesen beiden Steinen". Beides ist der
+ * unzuverlässigste Teil der App — beim Bau dieser Fassung antwortete Overpass
+ * reihenweise mit 429 und 504 und brauchte bis zu 92 s, bis alle drei
+ * Instanzen aufgegeben hatten, während die ORM-API jedes Mal unter einer
+ * Sekunde lieferte.
+ *
+ * Deshalb liegen die Gleise jetzt als Kacheln bei, erzeugt von
+ * werkzeug/netz-bauen.py aus OpenStreetMap. Overpass bleibt der Rückfall für
+ * alles außerhalb des erzeugten Gebiets und für den Fall, dass die Kachel
+ * keinen durchgehenden Weg hergibt.
+ *
+ * Warum nicht, wie zuerst überlegt, fertige Kilometerpunkte alle 100 m? Weil
+ * das dieselbe Auskunft teurer schreibt: Die Stützpunkte aus OpenStreetMap
+ * stehen gemessen im Mittel alle 46–55 m, kosten weniger Platz und häufen sich
+ * dort, wo es krümmt, statt gleichmäßig über Geraden verteilt zu liegen. Und
+ * ein Raster fester Punkte beantwortet die erste Frage nicht besser. */
+
+const NETZ_PFAD = 'netz/';
+
+/** Google-Polyline zurücklesen — dasselbe Format, das netz-bauen.py schreibt. */
+function polylineDekodieren(s, faktor = 1e5) {
+  const pts = [];
+  let i = 0, lat = 0, lon = 0;
+  while (i < s.length) {
+    let wert, verschub, b;
+    for (let achse = 0; achse < 2; achse++) {
+      wert = 0; verschub = 0;
+      do {
+        b = s.charCodeAt(i++) - 63;
+        wert |= (b & 0x1f) << verschub;
+        verschub += 5;
+      } while (b >= 0x20);
+      const d = (wert & 1) ? ~(wert >> 1) : (wert >> 1);
+      if (achse === 0) lat += d; else lon += d;
+    }
+    pts.push({ lat: lat / faktor, lon: lon / faktor });
+  }
+  return pts;
+}
+
+let netzIndexHolen = null;
+
+/** Index einmal laden; false heißt „kein mitgeliefertes Netz vorhanden". */
+function netzBereit() {
+  if (!netzIndexHolen) {
+    netzIndexHolen = (async () => {
+      try {
+        const r = await fetch(NETZ_PFAD + 'index.json');
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const d = await r.json();
+        const kacheln = d.kacheln || [];
+        return {
+          raster: d.raster || 0.5,
+          stand: d.stand || '',
+          mitInhalt: new Set(kacheln),
+          da: new Set([...kacheln, ...(d.leer || [])])
+        };
+      } catch {
+        return false;      // App läuft dann wie zuvor über Overpass
+      }
+    })();
+  }
+  return netzIndexHolen;
+}
+
+const netzKacheln = new Map();     // Name → Versprechen auf {wege, punkte}
+
+function netzKachel(name) {
+  if (!netzKacheln.has(name)) {
+    netzKacheln.set(name, (async () => {
+      try {
+        const r = await fetch(`${NETZ_PFAD}t_${name}.json`);
+        if (!r.ok) return null;
+        const d = await r.json();
+        const wege = (d.w || []).map(w => {
+          const geometry = polylineDekodieren(w.p);
+          let s = 90, we = 180, n = -90, o = -180;
+          for (const p of geometry) {
+            if (p.lat < s) s = p.lat;
+            if (p.lat > n) n = p.lat;
+            if (p.lon < we) we = p.lon;
+            if (p.lon > o) o = p.lon;
+          }
+          return { ref: w.r || '', geometry, bb: [s, we, n, o] };
+        });
+        const koord = d.p ? polylineDekodieren(d.p) : [];
+        const punkte = koord.map((k, i) => ({ lat: k.lat, lon: k.lon, km: d.km[i] }));
+        return { wege, punkte };
+      } catch {
+        return null;
+      }
+    })());
+  }
+  return netzKacheln.get(name);
+}
+
+/** Alles Mitgelieferte in einem Rechteck — oder null, wenn dort nichts erzeugt wurde. */
+async function netzBereich(sued, west, nord, ost) {
+  const ix = await netzBereit();
+  if (!ix) return null;
+
+  const namen = [];
+  for (let y = Math.floor(sued / ix.raster); y <= Math.floor(nord / ix.raster); y++) {
+    for (let x = Math.floor(west / ix.raster); x <= Math.floor(ost / ix.raster); x++) {
+      namen.push(y + '_' + x);
+    }
+  }
+  // Eine einzige nicht erzeugte Kachel macht die Auskunft unvollständig —
+  // dann lieber ganz über Overpass, als stillschweigend Gleise zu verlieren.
+  if (!namen.length || !namen.every(n => ix.da.has(n))) return null;
+
+  const teile = await Promise.all(namen.filter(n => ix.mitInhalt.has(n)).map(netzKachel));
+  if (teile.some(t => t === null)) return null;
+
+  const wege = [], punkte = [];
+  for (const t of teile) {
+    // Eine Kachel deckt rund 55 km ab; für den Graphen zählt nur das Rechteck
+    for (const w of t.wege) {
+      if (w.bb[0] > nord || w.bb[2] < sued || w.bb[1] > ost || w.bb[3] < west) continue;
+      wege.push(w);
+    }
+    for (const p of t.punkte) {
+      if (p.lat >= sued && p.lat <= nord && p.lon >= west && p.lon <= ost) punkte.push(p);
+    }
+  }
+  return { wege, punkte };
+}
+
 /* ============================ Feinrechnung entlang des Gleises ============================ */
 
 /* Die geradlinige Interpolation schneidet Bögen ab. Wer den tatsächlichen
@@ -652,11 +783,29 @@ function zeichneGleisweg(path) {
 }
 
 /* Der Gleisweg zwischen zwei Steinen — beide Richtungen brauchen genau das:
- * km → Position folgt ihm vorwärts, Position → km misst daran entlang. */
+ * km → Position folgt ihm vorwärts, Position → km misst daran entlang.
+ *
+ * Zuerst aus den mitgelieferten Kacheln; nur wenn dort nichts liegt oder sich
+ * kein brauchbarer Weg findet, muss Overpass ran. Der Rückfall ist wichtig:
+ * Die Kacheln lassen Anschluss- und Rangiergleise weg, und an einer Stelle,
+ * wo der Verlauf ausgerechnet darüber führt, käme sonst gar nichts heraus. */
 async function gleisWegZwischen(A, B) {
+  const pad = 0.012;
+  const lokal = await netzBereich(
+    Math.min(A.lat, B.lat) - pad, Math.min(A.lon, B.lon) - pad,
+    Math.max(A.lat, B.lat) + pad, Math.max(A.lon, B.lon) + pad);
+
+  if (lokal && lokal.wege.length) {
+    try { return wegAusWegen(lokal.wege, A, B); } catch { /* dann eben über Overpass */ }
+  }
+
   const ways = await railGeometry(A, B);
   if (!ways.length) throw new Error('keine Gleisgeometrie im Ausschnitt');
+  return wegAusWegen(ways, A, B);
+}
 
+/** Aus Wegstücken den Gleisweg zwischen zwei Steinen suchen und plausibilisieren. */
+function wegAusWegen(ways, A, B) {
   const nodes = buildGraph(ways);
   if (nodes.size > 60000) throw new Error('zu viele Gleise im Ausschnitt');
 
@@ -2643,7 +2792,43 @@ function distToWay(lat, lon, geometry) {
 /** Welche Strecke liegt an dieser Stelle? Das kann nur Overpass beantworten.
  *  Die Kandidaten werden nach echtem Abstand zum Klick sortiert — an einem
  *  Bahnhof liegen sonst ein halbes Dutzend gleichrangiger Nummern nebeneinander. */
+/** Dieselbe Auskunft wie linesNear, nur aus den mitgelieferten Kacheln. */
+async function netzLinesNear(lat, lon) {
+  const dLat = SEED_RADIUS / 110540;
+  const dLon = SEED_RADIUS / (111320 * Math.max(0.2, Math.cos(lat * Math.PI / 180)));
+  const bereich = await netzBereich(lat - dLat, lon - dLon, lat + dLat, lon + dLon);
+  if (!bereich) return null;
+
+  const byRef = new Map();
+  for (const w of bereich.wege) {
+    if (!w.ref) continue;
+    const d = distToWay(lat, lon, w.geometry);
+    if (d > 80) continue;                       // derselbe Umkreis wie in der Overpass-Abfrage
+    for (const part of String(w.ref).split(';')) {
+      const r = part.trim();
+      if (!r) continue;
+      if (!byRef.has(r) || byRef.get(r) > d) byRef.set(r, d);
+    }
+  }
+
+  let seed = null;
+  for (const p of bereich.punkte) {
+    const d = haversine(lat, lon, p.lat, p.lon);
+    if (d <= SEED_RADIUS && (!seed || d < seed.dist)) seed = { km: p.km, dist: d };
+  }
+
+  return {
+    refs: [...byRef.entries()].sort((a, b) => a[1] - b[1]).slice(0, 4)
+      .map(([ref, dist]) => ({ ref, dist })),
+    seed
+  };
+}
+
 async function linesNear(lat, lon) {
+  // Erst das Mitgelieferte — das ist sofort da und hängt an keinem fremden Dienst
+  const lokal = await netzLinesNear(lat, lon);
+  if (lokal && lokal.refs.length) return lokal;
+
   /* Kilometerangaben hängen nicht nur an Steinen: Bahnübergänge, Signale und
    * Weichen tragen sie genauso, und zwar mal als railway:position, mal als
    * railway:position:exact. Am Meldepunkt bei Bischofswiesen stand der nächste

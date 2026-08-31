@@ -5,11 +5,12 @@
  * neue Version sofort ankommt statt hinter einem alten Cache zu hängen.
  */
 
-const VERSION = 'v8';
+const VERSION = 'v9';
 const SHELL = `railnav-shell-${VERSION}`;
 const TILES = `railnav-tiles-${VERSION}`;
 const DATA = `railnav-data-${VERSION}`;
-const KEEP = [SHELL, TILES, DATA];
+const NETZ = `railnav-netz-${VERSION}`;
+const KEEP = [SHELL, TILES, DATA, NETZ];
 
 const SHELL_FILES = [
   './', 'index.html', 'style.css', 'app.js',
@@ -20,6 +21,12 @@ const SHELL_FILES = [
 const TILE_HOSTS = ['tile.openstreetmap.org', 'tiles.openrailwaymap.org', 'server.arcgisonline.com',
   'geoservices.bayern.de'];
 const MAX_TILES = 600;
+
+/* Die Netzkacheln unter netz/ ändern sich nur, wenn werkzeug/netz-bauen.py neu
+ * läuft — und dann wird hier ohnehin VERSION hochgezählt. Deshalb "erst Cache":
+ * Für die übrigen eigenen Dateien gilt bewusst das Gegenteil, aber bei 300
+ * Kacheln wäre eine Netzabfrage je Kachel nur Wartezeit ohne Gewinn. */
+const MAX_NETZ = 500;
 
 self.addEventListener('install', event => {
   event.waitUntil((async () => {
@@ -98,7 +105,9 @@ self.addEventListener('fetch', event => {
   if (!/^https?:$/.test(url.protocol)) return;
 
   if (url.origin === self.location.origin) {
-    event.respondWith(networkFirst(request, SHELL, true));
+    event.respondWith(url.pathname.includes('/netz/')
+      ? cacheFirst(request, NETZ, MAX_NETZ)
+      : networkFirst(request, SHELL, true));
   } else if (TILE_HOSTS.some(h => url.hostname === h || url.hostname.endsWith('.' + h))) {
     event.respondWith(cacheFirst(request, TILES, MAX_TILES));
   } else if (url.hostname === 'api.openrailwaymap.org') {

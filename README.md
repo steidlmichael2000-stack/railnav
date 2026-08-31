@@ -43,6 +43,9 @@ am Rechner und lässt sich als App auf den Startbildschirm legen.
   Dunkelmodus lesbar bleiben.
 - **Karte drehen** mit zwei Fingern; sobald sie verdreht ist, erscheint links unten ein Kompass,
   dessen Nadel samt N mitdreht und nach Norden zeigt — ein Tipp darauf stellt die Karte gerade.
+- **Das Gleisnetz liegt bei.** Welche Strecke an einer Stelle liegt und wie das Gleis dort
+  verläuft, beantwortet die App aus mitgelieferten Kacheln statt über eine Fremdabfrage —
+  gemessen 18 ms statt Sekunden, und es geht ohne Netz.
 - **Offlinefähig** — die App selbst und bereits geladene Kartenkacheln bleiben ohne Netz nutzbar.
 
 Eingabe: `12,5` oder `12.5`, auch Hektometer-Schreibweise `14+250` (= km 14,250).
@@ -436,19 +439,110 @@ angetippte Stelle. Gerechnet wird danach genau wie bei einem Tipp auf die Karte,
 Fangradius von 80 m statt der zoomabhängigen Fingerbreite — die Koordinate eines gesetzten Punktes
 steht ja fest und soll nicht je nach Zoomstufe an eine andere Linie springen.
 
+## Das mitgelieferte Gleisnetz
+
+Zwei Fragen brauchten zwingend [Overpass](https://overpass-api.de/): *welche Strecke liegt hier*
+und *wie verläuft das Gleis zwischen diesen beiden Steinen*. Das ist der unzuverlässigste Teil der
+App. Beim Bau dieser Fassung antwortete Overpass reihenweise mit 429 und 504 und brauchte **bis zu
+92 s**, bis alle drei Instanzen aufgegeben hatten, während die ORM-API jedes Mal unter einer
+Sekunde lieferte.
+
+Deshalb liegen die Gleise jetzt unter `netz/` bei, erzeugt von `werkzeug/netz-bauen.py` aus
+OpenStreetMap. Gemessen am selben Punkt bei Bischofswiesen:
+
+| | über Overpass | aus der Kachel |
+| --- | --- | --- |
+| Strecke + Startwert bestimmen | 596 ms – 25 s (oft Fehlschlag) | **18 ms** |
+| Punkt in der 4,4-km-Lücke, mit Gleisverlauf | 11,5 s | **114 ms** |
+
+### Warum Linienzüge und keine fertigen Kilometerpunkte
+
+Die naheliegende Idee wäre, alle 10–100 m einen Punkt vorzurechnen und abzulegen. Das ist dieselbe
+Auskunft, nur teurer geschrieben: Die Stützpunkte aus OpenStreetMap stehen gemessen im Mittel alle
+46–55 m, kosten weniger Platz und häufen sich dort, wo es krümmt, statt gleichmäßig über Geraden
+verteilt zu liegen. Ein Raster fester Punkte beantwortet außerdem die erste Frage nicht besser.
+Gerechnet mit echten Daten:
+
+| Ablage | Punkte | gzip, hochgerechnet |
+| --- | --- | --- |
+| alle 10 m | 3,3 Mio. | rund 12 MB |
+| alle 100 m | 330.000 | rund 1,2 MB |
+| OSM-Stützpunkte, auf 5 m vereinfacht | rund 300.000 | **rund 1,5 MB** |
+
+### Was in den Kacheln steht
+
+Gleise mit `railway=rail`, `light_rail` oder `narrow_gauge` **ohne** `service`-Tag. Das lässt
+Anschluss-, Abstell- und Rangiergleise weg und behält die durchgehenden Haupt- und
+Bahnhofsgleise — an einem dichten Ausschnitt im Ruhrgebiet gemessen 334 km statt 291 km wie bei
+einer reinen `ref`-Auswahl. Die zusätzlichen 238 Wege *ohne* Nummer sind genau die, die den
+Graphen an Bahnhöfen zusammenhalten. Dazu kommen alle Bahnknoten mit `railway:position` oder
+`railway:position:exact` als Startwert für die Kilometrierung.
+
+Die Geometrie wird mit Douglas-Peucker auf 5 m vereinfacht — **aber nicht über Verzweigungen
+hinweg**. Zwei Gleise hängen in OpenStreetMap zusammen, indem sie sich einen Knoten teilen, und
+der muss nicht das Ende eines Weges sein. Wirft die Vereinfachung so einen Knoten weg, fällt der
+Graph an dieser Weiche auseinander und die Wegsuche findet keinen durchgehenden Verlauf mehr.
+Deshalb wird erst gezählt, wo sich Wege berühren, und nur zwischen diesen Punkten vereinfacht.
+
+Was die Vereinfachung kostet, am Testfall der 4,4-km-Lücke der Strecke 5741 nachgerechnet:
+
+| | voller Overpass-Auszug | vereinfachte Kachel |
+| --- | --- | --- |
+| Gleisweg zwischen km 3,396 und 7,8 | 4412 m | 4419 m |
+| abgelesener Kilometer | 5,599 | 5,590 |
+
+9 m Unterschied — gegenüber den gemessenen 21 m typischer und 88 m schlechtester Abweichung des
+Verfahrens selbst fällt das nicht ins Gewicht.
+
+### Kacheln, Deckung und Rückfall
+
+Ein Raster von 0,5°, benannt `netz/t_<y>_<x>.json` mit `y = floor(lat/0,5)`. Eine Kachel deckt
+rund 55 × 55 km ab und wiegt in dünn besiedelter Gegend etwa 25 kB. `netz/index.json` führt, welche
+Zellen erzeugt wurden — mit Inhalt und leer, denn „hier liegt kein Gleis" ist eine Auskunft und
+kein fehlender Datensatz.
+
+**Fehlt auch nur eine berührte Kachel, geht die Anfrage vollständig über Overpass.** Halb aus
+Kacheln und halb aus dem Netz zu antworten hieße, stillschweigend Gleise zu verlieren. Overpass
+bleibt ebenso der Rückfall, wenn die Kachel keinen durchgehenden Weg hergibt — die weggelassenen
+Rangiergleise können an einer Stelle genau die fehlende Verbindung sein.
+
+Der Service Worker legt Kacheln „erst Cache" ab, anders als alle übrigen eigenen Dateien: Sie
+ändern sich nur, wenn der Erzeuger neu läuft, und dann wird ohnehin `VERSION` in `sw.js`
+hochgezählt.
+
+### Neu erzeugen
+
+```bash
+python werkzeug/netz-bauen.py
+```
+
+Die rohen Overpass-Antworten landen in `.cache/overpass` und werden beim nächsten Lauf
+wiederverwendet — der Abruf darf also abbrechen und später weiterlaufen. `--nur-bauen` schreibt
+die Kacheln allein aus dem Zwischenspeicher, ohne eine einzige Netzabfrage. Danach `VERSION` in
+`sw.js` hochzählen, sonst bekommen Geräte mit altem Cache die neuen Kacheln nicht.
+
+Die Daten stammen aus OpenStreetMap und stehen unter der **ODbL**; das gilt auch für die erzeugten
+Kacheln. `netz/index.json` trägt Stand und Herkunft mit.
+
 ## Grenzen
 
 **Keine amtliche Quelle.** Zur groben Verortung im Gelände gut geeignet, nicht für Vermessung,
 Disposition oder sicherheitsrelevante Entscheidungen.
 
 Das Tippen auf die Karte funktioniert ohne Netzabfrage, solange die Strecke schon geladen ist.
-Wird weit abseits getippt, muss [Overpass](https://overpass-api.de/) beantworten, welche Strecke
-dort liegt — das dauert einige Sekunden, ist aus manchen Netzen gesperrt, und an Knotenbahnhöfen
-liegen mehrere Strecken nebeneinander. Dann fragt die App nach, sortiert nach Abstand zum Tippen.
+Wird weit abseits getippt, beantwortet das mitgelieferte Netz, welche Strecke dort liegt; nur
+außerhalb des erzeugten Gebiets muss [Overpass](https://overpass-api.de/) ran — das dauert einige
+Sekunden und ist aus manchen Netzen gesperrt. An Knotenbahnhöfen liegen mehrere Strecken
+nebeneinander; dann fragt die App nach, sortiert nach Abstand zum Tippen.
+
+Die Kilometrierung selbst kommt weiter von der OpenRailwayMap-API — ohne Netz lässt sich zu einer
+neuen Strecke also kein Kilometer bestimmen, auch wenn ihr Verlauf mitgeliefert ist.
 
 ## Selbst betreiben
 
-Es gibt keinen Build-Schritt — die Dateien auf einen beliebigen Webspace legen genügt.
+Es gibt keinen Build-Schritt — die Dateien auf einen beliebigen Webspace legen genügt. Das gilt
+auch für `netz/`: Die Kacheln liegen fertig im Verzeichnis und werden nur neu erzeugt, wenn man
+`werkzeug/netz-bauen.py` selbst laufen lässt (siehe oben).
 Lokal zum Ausprobieren:
 
 ```bash
@@ -469,7 +563,9 @@ das: Nutzen, ändern und weitergeben ist frei, wer es weitergibt muss den Quellc
 GPL-3.0 offenhalten.
 
 Karten- und Bahndaten: © OpenStreetMap-Mitwirkende
-([ODbL](https://www.openstreetmap.org/copyright)), Bahn-Layer von
+([ODbL](https://www.openstreetmap.org/copyright)) — das schließt die mitgelieferten Netzkacheln
+unter `netz/` ein, die aus OSM abgeleitet sind und damit ebenfalls unter der ODbL stehen.
+Bahn-Layer von
 [OpenRailwayMap](https://www.openrailwaymap.org/) (CC-BY-SA 2.0), Luftbilder von Esri.
 Unter `vendor/` liegen [Leaflet](https://leafletjs.com/) (BSD-2-Clause) und
 [leaflet-rotate](https://github.com/Raruto/leaflet-rotate) (GPL-3.0) bei, damit die App ohne CDN
