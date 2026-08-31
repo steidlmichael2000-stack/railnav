@@ -16,8 +16,10 @@ am Rechner und lässt sich als App auf den Startbildschirm legen.
   Stein direkt antippen, statt zu interpolieren.
 - **Gemessene Genauigkeitsangabe.** Zu jedem Punkt steht dabei, wie weit er danebenliegen kann —
   nicht geschätzt, sondern an 1474 Steintripeln nachgemessen (siehe unten).
-- **Optional exakt auf dem Gleis.** Stehen die Steine weit auseinander, lässt sich der Punkt auf
-  Knopfdruck entlang des tatsächlichen Gleisverlaufs rechnen statt entlang der Luftlinie.
+- **Exakt auf dem Gleis.** Stehen die Steine weit auseinander, wird entlang des tatsächlichen
+  Gleisverlaufs gerechnet statt entlang der Luftlinie — in der Richtung km → Position auf
+  Knopfdruck, in der Gegenrichtung von selbst, sobald die Steine über 3 km auseinanderstehen und
+  die Gerade zwischen ihnen nichts mehr taugt.
 - **Karte, Luftbild, DOP20 und Geländerelief** umschaltbar, dazu Bahn-Layer und
   Flurstücksgrenzen als Auflagen, eigener Standort, Link zum Teilen, Betriebsstellensuche über
   Name, DS100 oder UIC.
@@ -197,10 +199,86 @@ der Fälle. Die Streuung der beiden Klammersteine ist also nicht der begrenzende
 ist die Streuung des Vergleichssteins selbst, mit dem gemessen wird. Die Zahlen der Tabelle sind damit
 wie in der anderen Richtung eine Obergrenze und nicht der Fehler des Verfahrens.
 
-**Deshalb gibt es in dieser Richtung bewusst keine Feinrechnung entlang des Gleises.** Sie könnte
-nur diese wenigen Meter wegnehmen und kostet eine Overpass-Abfrage von 15–40 s. Angezeigt wird
-stattdessen die gemessene Zahl: Das Etikett lautet „von der Karte ±57 m", und unter *Herkunft &
-Genauigkeit* steht, woher der Wert kommt.
+**Solange ein Steinpaar da ist, gibt es in dieser Richtung deshalb keine Feinrechnung entlang des
+Gleises.** Sie könnte nur diese wenigen Meter wegnehmen und kostet eine Overpass-Abfrage von
+15–40 s. Angezeigt wird stattdessen die gemessene Zahl: Das Etikett lautet „von der Karte ±57 m",
+und unter *Herkunft & Genauigkeit* steht, woher der Wert kommt.
+
+### Wenn gar kein Steinpaar da ist
+
+Die Tabelle oben endet bei 3,1 km Steinabstand, und das ist kein Zufall: Weiter auseinanderliegende
+Steine verbindet die App fürs Zeichnen und Antippen gar nicht erst (`MAX_DRAW_GAP_KM`), weil eine
+Gerade über Kilometer unbekannten Verlaufs auf der Karte falsch aussieht und Tipps weit neben dem
+echten Gleis an sich zöge. Bisher war damit auch die Kilometersuche zu Ende — obwohl der Punkt
+sichtbar neben dem Gleis lag.
+
+Jetzt holt die App in diesem Fall den Gleisverlauf und misst daran entlang, mit demselben Baustein
+wie in der Gegenrichtung: Geometrie über Overpass, Knotennetz, kürzester Weg zwischen den beiden
+Steinen, anteilige Weglänge statt Sehnenanteil. Der Kilometer heißt dann *entlang des Gleises*.
+
+Nachgemessen wie überall sonst hier — übersprungene Zwischensteine mit bekanntem Kilometer,
+Steinabstand 3,0–6,8 km, 13 auswertbare Fälle auf drei Strecken:
+
+| Strecke | Steine | Lücke | Sehne | Gleisweg |
+| --- | --- | --- | --- | --- |
+| 5321 | km 1,2–7,6 | 6400 m | **114 m** | 19 m |
+| 5321 | km 13,8–17,2 | 3400 m | 0 m | 16 m |
+| 5321 | km 53–57,6 | 4600 m | 16 m | 6 m |
+| 5321 | km 54–58,4 | 4400 m | 20 m | 26 m |
+| 5321 | km 58,4–61,4 | 3000 m | 4 m | 21 m |
+| 5321 | km 60,2–63,6 | 3400 m | 22 m | 13 m |
+| 5321 | km 96,42–100,2 | 3780 m | 39 m | 45 m |
+| 5500 | km 23,4–30 | 6600 m | 4 m | 88 m |
+| 5741 | km 0,243–3,396 | 3153 m | 75 m | 22 m |
+| 5741 | km 2,4–7,8 | 5400 m | **186 m** | 12 m |
+| 5741 | km 3,396–10,2 | 6804 m | 93 m | 27 m |
+| 5741 | km 10,759–16,18 | 5421 m | 4 m | 23 m |
+| 5741 | km 12,6–17,743 | 5143 m | **179 m** | 4 m |
+
+**Im Median nehmen sich beide nichts** — 22 m gegenüber 21 m. Der Unterschied steckt im Schwanz:
+Die Sehne lag in **3 von 13 Fällen über 100 m** daneben, bis zu 186 m; der Gleisweg in keinem
+einzigen, im schlechtesten Fall 88 m.
+
+Die Sehne ist also nicht durchgehend schlecht: Oft liegt sie ebenfalls unter 25 m, weil der
+gesuchte Punkt zufällig nahe der Verbindungslinie liegt. **Man sieht dem Ergebnis aber nicht an,
+ob man in diesem Fall steckt oder im 186-Meter-Fall** — und genau deshalb wird gerechnet statt
+geschätzt, obwohl der Median dasselbe sagt.
+
+Zwei Testfälle stehen nicht in der Tabelle. Einer wurde von der Wegprüfung abgelehnt (siehe unten).
+Beim anderen — Strecke 5500, Vergleichsstein bei km 5,6 zwischen km 5,2 und 10,4 — lagen **beide**
+Verfahren um 4,3 km daneben, bei sauberem Weg-zu-Kilometer-Verhältnis von 0,995 und null Abstand
+quer zum Gleis. Der Stein selbst passt dort also nicht zur Kilometrierung seiner Nachbarn; das sagt
+etwas über die Daten und nichts über das Verfahren.
+
+Die Prüfung Gleisweg gegen Kilometerdifferenz greift auch hier und ist kein Zierrat: In einem der
+Testfälle (Strecke 5321, km 9,9–13,7) fand Dijkstra einen 5958 m langen Weg für 3800 m
+Kilometerdifferenz — über ein Nachbargleis. Das Ergebnis wäre 579 m danebengelegen; das Verhältnis
+1,57 liegt außerhalb von 0,8–1,3, und die App lehnt es ab, statt es zu zeigen.
+
+### Woran die Suche vorher scheiterte
+
+Gemeldet mit einer Koordinate bei Bischofswiesen (47,667669 / 12,944516), 51 m vom Gleis der
+Strecke 5741 entfernt: *„Strecke 5741 liegt hier, aber im Umkreis von 900 m ist kein Kilometerstein
+erfasst."*
+
+Die Overpass-Abfrage suchte nach `[railway=milestone]` mit dem Tag `railway:position`, und zwar im
+Umkreis von 900 m. Was dort tatsächlich steht:
+
+| Abstand | Objekt | Tag | Kilometer |
+| --- | --- | --- | --- |
+| 596 m | `railway=level_crossing` | `railway:position:exact` | 10,759 |
+| 1138 m | `railway=milestone` | `railway:position` | 12,6 |
+| 1181 m | `railway=level_crossing` | `railway:position` | 10,2 |
+
+Der nächste brauchbare Wert lag also 596 m entfernt und fiel durch **beide** Maschen zugleich: kein
+Stein, und das Tag heißt anders. Der übernächste war ein Stein mit dem richtigen Tag, stand aber
+1138 m weit weg. Die Abfrage nimmt jetzt jeden Bahnknoten mit `railway:position` oder
+`railway:position:exact` und schaut 4 km weit — der Wert dient ohnehin nur als Startposition für
+die ORM-Abfrage, die danach die Steine ringsum liefert. Findet sich auch so nichts, wird die
+Strecke selbst abgefragt, statt aufzugeben.
+
+Der gemeldete Punkt löst sich damit in 0,6 s auf: Strecke 5741, km 11,388, 92 m querab der
+Verbindungslinie zwischen den Angaben bei km 10,759 und 12,6.
 
 ### Zwei weitere Fallstricke, die die App abfängt
 
@@ -347,8 +425,16 @@ auf 0 Pixel. Das kostet Rechenzeit — gemessen 0,6 ms bei den üblichen Dateien
 2 ms bei 200 Kreisen, aber 14 ms bei einer einzigen Linie mit 5000 Stützpunkten, was bei 60 Bildern
 je Sekunde zu viel wäre. Deshalb gilt ein Budget von 2500 Stützpunkten: darunter wird nachgezogen,
 darüber die Vektorebene für die Dauer der Geste ausgeblendet und danach einmal neu gesetzt.
-Verschwundene Linien irritieren weniger als umherfliegende. Ein Tipp auf ein KML-Objekt löst die Kilometersuche nicht mit
-aus, sondern zeigt nur die Sprechblase.
+Verschwundene Linien irritieren weniger als umherfliegende.
+
+### Kilometer zu einem KML-Objekt
+
+Ein Tipp auf ein KML-Objekt löst die Kilometersuche nicht von selbst aus — sonst würde jeder Blick
+in die Merkmale eine Netzabfrage anstoßen. In der Sprechblase steht dafür der Knopf **„Kilometer
+bestimmen"**: Bei einem Punkt gilt dessen eigene Koordinate, bei einer Linie oder Fläche die
+angetippte Stelle. Gerechnet wird danach genau wie bei einem Tipp auf die Karte, nur mit festem
+Fangradius von 80 m statt der zoomabhängigen Fingerbreite — die Koordinate eines gesetzten Punktes
+steht ja fest und soll nicht je nach Zoomstufe an eine andere Linie springen.
 
 ## Grenzen
 

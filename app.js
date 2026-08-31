@@ -43,6 +43,16 @@ const MAX_GAP_KM = 8;
  * falsch aus und würde Klicks weit neben dem echten Gleis an sich ziehen. */
 const MAX_DRAW_GAP_KM = 3;
 const CLICK_TOL_PX = 34;     // Klicktoleranz quer zur Strecke
+/* Toleranz quer zur Strecke für einen gesetzten Punkt statt eines Fingertipps —
+ * etwa aus einer KML-Datei. Dessen Koordinate steht fest und soll nicht je nach
+ * Zoomstufe an eine andere Linie springen; 80 m ist derselbe Umkreis, mit dem
+ * linesNear nach der Strecke unter dem Punkt sucht. */
+const PUNKT_TOL = 80;
+/* Wie weit wird nach einer Kilometerangabe gesucht, die der ORM-Abfrage als
+ * Startwert dient? Der Wert muss nur grob stimmen — die API liefert danach die
+ * Steine ringsum. Weiter als 4 km hinauszuschauen brächte eher Angaben einer
+ * fremden Strecke ins Spiel. */
+const SEED_RADIUS = 4000;
 const STORE_KEY = 'railnav.v3';
 
 /* Mehrere Instanzen, weil einzelne zeitweise ausfallen: Die Hauptinstanz war
@@ -386,8 +396,30 @@ function tapError(chordM) {
   return TAP_ERR.find(r => chordM < r.upTo);
 }
 
-/** Nächster Punkt auf dem Streckenzug der Kilometersteine — liefert auch den Kilometer dort. */
-function projectOnLine(sorted, lat, lon) {
+/* Und der dritte Fall: Kilometer aus der Karte gelesen, wo überhaupt kein
+ * brauchbares Steinpaar mehr da ist und stattdessen der echte Gleisverlauf
+ * gemessen wird.
+ *
+ * Nachgemessen wie die beiden Tabellen darüber, an 13 übersprungenen
+ * Zwischensteinen auf den Strecken 5321, 5500 und 5741 mit 3,0–6,8 km
+ * Steinabstand. Das überraschende Ergebnis: Im Mittel nehmen sich Sehne und
+ * Gleisweg nichts (22 m gegenüber 21 m). Der Unterschied steckt im Schwanz —
+ * die Sehne lag in 3 der 13 Fälle über 100 m daneben, bis zu 186 m, der
+ * Gleisweg in keinem einzigen. Und man sieht dem Ergebnis nicht an, in welchem
+ * der beiden Fälle man gerade steckt.
+ *
+ * Deshalb wird hier gerechnet und nicht geschätzt, obwohl der Median dasselbe
+ * sagt. Die Streuung des Vergleichssteins steckt in beiden Zahlen mit drin. */
+const GLEIS_ERR = { typical: 21, worst: 88, sehne: 186, ueber100: 3, faelle: 13 };
+
+/** Nächster Punkt auf dem Streckenzug der Kilometersteine — liefert auch den Kilometer dort.
+ *
+ * maxGap steuert, wie weit zwei Steine auseinanderstehen dürfen, um noch
+ * verbunden zu werden. Voreinstellung ist die enge Grenze fürs Zeichnen und
+ * Antippen; die Feinrechnung entlang des Gleises sucht mit MAX_GAP_KM ein
+ * Steinpaar auch über weite Lücken, weil sie danach ohnehin dem echten Verlauf
+ * folgt und nicht der Sehne. */
+function projectOnLine(sorted, lat, lon, maxGap = MAX_DRAW_GAP_KM) {
   if (!sorted || sorted.length < 2) return null;
 
   // Lokale ebene Näherung in Metern; auf diesen Entfernungen völlig ausreichend
@@ -397,7 +429,7 @@ function projectOnLine(sorted, lat, lon) {
 
   for (let i = 1; i < sorted.length; i++) {
     const a = sorted[i - 1], b = sorted[i];
-    if (!segmentOk(a, b, MAX_DRAW_GAP_KM)) continue;   // Lücken und Fehlpaare überspringen
+    if (!segmentOk(a, b, maxGap)) continue;   // Lücken und Fehlpaare überspringen
     const dkm = b.km - a.km;
 
     const ax = a.lon * kx, ay = a.lat * ky;
@@ -413,7 +445,7 @@ function projectOnLine(sorted, lat, lon) {
       // Kilometerspruenge und falsch zusammengepaarte Steine.
       const chord = Math.sqrt(len2);
       best = { dist, km: a.km + t * dkm, lat: cy / ky, lon: cx / kx,
-        between: [a.km, b.km], chord,
+        between: [a.km, b.km], chord, a, b,
         spanRatio: dkm ? chord / (Math.abs(dkm) * 1000) : null };
     }
   }
@@ -490,16 +522,59 @@ function nearestNode(nodes, lat, lon) {
   return { key, dist };
 }
 
+/** Kleinster Eintrag zuerst — ein Binärhaufen, damit Dijkstra nicht jedes Mal
+ *  die ganze Entfernungstabelle durchsuchen muss. Bei einem Bahnhof mit
+ *  zehntausenden Stützpunkten war genau das der Unterschied zwischen einer
+ *  Sekunde und einer stehenden Seite. */
+class MinHeap {
+  constructor() { this.a = []; }
+  get size() { return this.a.length; }
+  push(prio, val) {
+    const a = this.a;
+    a.push([prio, val]);
+    let i = a.length - 1;
+    while (i > 0) {
+      const p = (i - 1) >> 1;
+      if (a[p][0] <= a[i][0]) break;
+      [a[p], a[i]] = [a[i], a[p]];
+      i = p;
+    }
+  }
+  pop() {
+    const a = this.a, top = a[0];
+    const last = a.pop();
+    if (a.length) {
+      a[0] = last;
+      let i = 0;
+      for (;;) {
+        const l = 2 * i + 1, r = l + 1;
+        let m = i;
+        if (l < a.length && a[l][0] < a[m][0]) m = l;
+        if (r < a.length && a[r][0] < a[m][0]) m = r;
+        if (m === i) break;
+        [a[m], a[i]] = [a[i], a[m]];
+        i = m;
+      }
+    }
+    return top;
+  }
+}
+
 /** Dijkstra über das Knotennetz. */
 function shortestPath(nodes, startKey, endKey) {
   const dist = new Map([[startKey, 0]]);
   const prev = new Map();
   const done = new Set();
+  const offen = new MinHeap();
+  offen.push(0, startKey);
 
   for (;;) {
-    let cur = null, curD = Infinity;
-    for (const [k, d] of dist) {
-      if (!done.has(k) && d < curD) { curD = d; cur = k; }
+    let cur = null, curD = 0;
+    // Veraltete Einträge stehen doppelt im Haufen — den schon erledigten Knoten
+    // einfach überspringen ist billiger, als im Haufen zu suchen.
+    while (offen.size) {
+      const [d, k] = offen.pop();
+      if (!done.has(k)) { cur = k; curD = d; break; }
     }
     if (cur === null) return null;          // nicht verbunden
     if (cur === endKey) break;
@@ -507,7 +582,9 @@ function shortestPath(nodes, startKey, endKey) {
     for (const [nk, w] of nodes.get(cur).adj) {
       if (done.has(nk)) continue;
       const nd = curD + w;
-      if (nd < (dist.has(nk) ? dist.get(nk) : Infinity)) { dist.set(nk, nd); prev.set(nk, cur); }
+      if (nd < (dist.has(nk) ? dist.get(nk) : Infinity)) {
+        dist.set(nk, nd); prev.set(nk, cur); offen.push(nd, nk);
+      }
     }
   }
 
@@ -540,6 +617,101 @@ function pointAlong(path, target) {
   return { lat: last[0], lon: last[1] };
 }
 
+/** Umgekehrt: nächster Punkt auf dem Streckenzug — mit der Weglänge bis dorthin.
+ *  along und len kommen aus derselben ebenen Näherung, ihr Verhältnis ist also
+ *  frei vom kleinen Maßstabsfehler dieser Näherung. */
+function projectOnPath(path, lat, lon) {
+  if (!path || path.length < 2) return null;
+
+  const ky = 110540, kx = Math.cos(lat * Math.PI / 180) * 111320;
+  const px = lon * kx, py = lat * ky;
+  let acc = 0, best = null;
+
+  for (let i = 1; i < path.length; i++) {
+    const ax = path[i - 1][1] * kx, ay = path[i - 1][0] * ky;
+    const dx = path[i][1] * kx - ax, dy = path[i][0] * ky - ay;
+    const len2 = dx * dx + dy * dy, seg = Math.sqrt(len2);
+    let t = len2 > 0 ? ((px - ax) * dx + (py - ay) * dy) / len2 : 0;
+    t = Math.max(0, Math.min(1, t));
+
+    const cx = ax + t * dx, cy = ay + t * dy;
+    const dist = Math.hypot(px - cx, py - cy);
+    if (!best || dist < best.dist) {
+      best = { dist, along: acc + t * seg, lat: cy / ky, lon: cx / kx };
+    }
+    acc += seg;
+  }
+  if (best) best.len = acc;
+  return best;
+}
+
+/** Den gefundenen Verlauf über die Karte legen — er belegt, worauf gerechnet wurde. */
+function zeichneGleisweg(path) {
+  trackLayer.clearLayers();
+  L.polyline(path, { color: '#22c55e', weight: 4, opacity: 0.9, interactive: false }).addTo(trackLayer);
+}
+
+/* Der Gleisweg zwischen zwei Steinen — beide Richtungen brauchen genau das:
+ * km → Position folgt ihm vorwärts, Position → km misst daran entlang. */
+async function gleisWegZwischen(A, B) {
+  const ways = await railGeometry(A, B);
+  if (!ways.length) throw new Error('keine Gleisgeometrie im Ausschnitt');
+
+  const nodes = buildGraph(ways);
+  if (nodes.size > 60000) throw new Error('zu viele Gleise im Ausschnitt');
+
+  const na = nearestNode(nodes, A.lat, A.lon);
+  const nb = nearestNode(nodes, B.lat, B.lon);
+  if (na.dist > 80 || nb.dist > 80) {
+    throw new Error(`die Steine liegen bis ${nfM.format(Math.max(na.dist, nb.dist))} m vom nächsten Gleis entfernt`);
+  }
+
+  const sp = shortestPath(nodes, na.key, nb.key);
+  if (!sp) throw new Error('kein durchgehender Gleisweg zwischen den beiden Steinen');
+
+  /* Der kürzeste Weg im Gleisnetz muss nicht die Strecke sein — an einem
+   * Bahnhof führt er auch mal über ein Nachbargleis. Passt seine Länge nicht
+   * zur Kilometerdifferenz, ist er der falsche Weg. */
+  const nominal = (B.km - A.km) * 1000;
+  const ratio = sp.length / nominal;
+  if (ratio < 0.8 || ratio > 1.3) {
+    throw new Error(`der gefundene Gleisweg ist ${nfM.format(sp.length)} m lang, die Kilometerdifferenz aber ${nfM.format(nominal)} m`);
+  }
+  return { path: sp.path, length: sp.length, nominal };
+}
+
+/* Position → Kilometer entlang des echten Gleisverlaufs.
+ *
+ * Die Sehnenrechnung braucht zwei Steine, die nah genug beieinanderstehen —
+ * jenseits von MAX_DRAW_GAP_KM wird gar nicht mehr verbunden, und dort endete
+ * die Kilometersuche bisher mit einer Fehlermeldung. Der Ausweg ist derselbe
+ * wie in der Gegenrichtung: den Verlauf holen und daran entlang messen.
+ *
+ * Wie genau das ist, steht bei GLEIS_ERR. Unterhalb von MAX_DRAW_GAP_KM wird
+ * weiter die Sehne genommen: Dort ist sie gemessen genauso gut und kostet keine
+ * Overpass-Abfrage von Sekunden. */
+async function kmEntlangGleis(ref, lat, lon) {
+  const e = lineCache.get(ref);
+  if (!e || e.sorted.length < 2) return null;
+
+  const grob = projectOnLine(e.sorted, lat, lon, MAX_GAP_KM);
+  if (!grob) return null;
+
+  const weg = await gleisWegZwischen(grob.a, grob.b);
+  const t = projectOnPath(weg.path, lat, lon);
+  if (!t || !t.len) return null;
+
+  const dkm = grob.b.km - grob.a.km;
+  return {
+    km: grob.a.km + (t.along / t.len) * dkm,
+    lat: t.lat, lon: t.lon, quality: 'karte-gleis',
+    between: [grob.a.km, grob.b.km], offset: t.dist,
+    chord: grob.chord, wegLaenge: weg.length, nominal: weg.nominal,
+    sehneKm: grob.km, pfad: weg.path,
+    operator: grob.a.operator || grob.b.operator, lineRef: grob.a.ref || ref
+  };
+}
+
 async function refineOnTrack() {
   const p = view.point;
   if (!p || p.quality !== 'interpoliert' || view.busy) return;
@@ -554,37 +726,17 @@ async function refineOnTrack() {
   showStatus('Hole den Gleisverlauf von Overpass — das dauert einige Sekunden …');
 
   try {
-    const ways = await railGeometry(A, B);
-    if (!ways.length) throw new Error('keine Gleisgeometrie im Ausschnitt');
-
-    const nodes = buildGraph(ways);
-    if (nodes.size > 60000) throw new Error('zu viele Gleise im Ausschnitt');
-
-    const na = nearestNode(nodes, A.lat, A.lon);
-    const nb = nearestNode(nodes, B.lat, B.lon);
-    if (na.dist > 80 || nb.dist > 80) {
-      throw new Error(`die Steine liegen bis ${nfM.format(Math.max(na.dist, nb.dist))} m vom nächsten Gleis entfernt`);
-    }
-
-    const sp = shortestPath(nodes, na.key, nb.key);
-    if (!sp) throw new Error('kein durchgehender Gleisweg zwischen den beiden Steinen');
-
-    const nominal = (B.km - A.km) * 1000;
-    const ratio = sp.length / nominal;
-    if (ratio < 0.8 || ratio > 1.3) {
-      throw new Error(`der gefundene Gleisweg ist ${nfM.format(sp.length)} m lang, die Kilometerdifferenz aber ${nfM.format(nominal)} m`);
-    }
+    const weg = await gleisWegZwischen(A, B);
 
     const t = (view.km - A.km) / (B.km - A.km);
-    const pos = pointAlong(sp.path, t * sp.length);
+    const pos = pointAlong(weg.path, t * weg.length);
     const korrektur = haversine(p.lat, p.lon, pos.lat, pos.lon);
 
-    trackLayer.clearLayers();
-    L.polyline(sp.path, { color: '#22c55e', weight: 4, opacity: 0.9, interactive: false }).addTo(trackLayer);
+    zeichneGleisweg(weg.path);
 
     view.point = {
       ...p, lat: pos.lat, lon: pos.lon, quality: 'gleis',
-      korrektur, wegLaenge: sp.length, nominal
+      korrektur, wegLaenge: weg.length, nominal: weg.nominal
     };
     drawPoint();
     renderBottom();
@@ -1592,6 +1744,12 @@ function kmlPopup(o, akte) {
   }
   const herkunft = [akte.name, o.ordner].filter(Boolean).join(' › ');
   if (herkunft) zeilen.push(`<small>${esc(herkunft)}</small>`);
+
+  /* Leer bleibt leer: Ein Objekt ohne Namen, Text und Merkmale bekam bisher
+   * keine Sprechblase, und daran ändert der Knopf nichts. */
+  if (!zeilen.length) return '';
+  zeilen.push(`<button type="button" class="kml-km" data-kmlkm>Kilometer bestimmen` +
+    `<small>rechnet die Stelle auf die Strecke — braucht Netz</small></button>`);
   return zeilen.join('');
 }
 
@@ -1647,10 +1805,21 @@ function kmlEbene(akte) {
       if (messModus) { messTipp(ev.latlng); return; }     // Fangen erledigt messTipp
       const html = kmlPopup(o, akte);
       if (!html) return;
-      L.popup({
+      /* Bei einem Punkt gilt seine eigene Koordinate, sonst die angetippte
+       * Stelle auf der Linie oder Fläche — und dieselbe Stelle hängt dann auch
+       * am Knopf, damit Sprechblase und Kilometer vom selben Ort reden. */
+      const wo = o.art === 'p' ? o.koord : [ev.latlng.lat, ev.latlng.lng];
+      const blase = L.popup({
         className: 'kml-pop', maxWidth: 300,
         autoPanPaddingTopLeft: L.point(14, 86), autoPanPaddingBottomRight: L.point(14, 24)
-      }).setLatLng(o.art === 'p' ? o.koord : ev.latlng).setContent(html).openOn(map);
+      }).setLatLng(wo).setContent(html).openOn(map);
+
+      const el = blase.getElement();
+      const knopf = el && el.querySelector('[data-kmlkm]');
+      if (knopf) knopf.addEventListener('click', () => {
+        map.closePopup();          // ohne Argument, sonst behält Leaflet _popup gesetzt
+        kmAnStelle(wo[0], wo[1], PUNKT_TOL);
+      });
     });
     l.addTo(gruppe);
   }
@@ -2396,11 +2565,24 @@ async function onMapClick(ev) {
   // Abgeschaltet, damit ein versehentlicher Tipp nicht die Anzeige umwirft.
   // Kilometersteine bleiben antippbar — die trifft man nicht zufällig.
   if (!tippAn() || view.busy) return;
-  const { lat, lng } = ev.latlng;
   closeSuggest();
+  await kmAnStelle(ev.latlng.lat, ev.latlng.lng, toleranceMeters(ev.latlng));
+}
+
+/* Welcher Kilometer gilt an dieser Stelle?
+ *
+ * Zuerst die schon geladene Strecke — das geht ohne Netz und ohne Wartezeit.
+ * Erst wenn der Punkt dort nicht hinpasst, muss Overpass sagen, welche Strecke
+ * hier überhaupt liegt.
+ *
+ * tol ist die Toleranz quer zur Strecke: beim Tippen die Fingerbreite auf der
+ * aktuellen Zoomstufe, bei einem gesetzten Punkt aus einer KML-Datei ein fester
+ * Wert — dessen Koordinate steht ja fest und soll nicht je nach Zoomstufe an
+ * eine andere Linie springen. */
+async function kmAnStelle(lat, lng, tol) {
+  if (view.busy) return;
 
   const e = view.ref && lineCache.get(view.ref);
-  const tol = toleranceMeters(ev.latlng);
 
   if (e && e.sorted.length > 1) {
     let hit = projectOnLine(e.sorted, lat, lng);
@@ -2462,11 +2644,20 @@ function distToWay(lat, lon, geometry) {
  *  Die Kandidaten werden nach echtem Abstand zum Klick sortiert — an einem
  *  Bahnhof liegen sonst ein halbes Dutzend gleichrangiger Nummern nebeneinander. */
 async function linesNear(lat, lon) {
+  /* Kilometerangaben hängen nicht nur an Steinen: Bahnübergänge, Signale und
+   * Weichen tragen sie genauso, und zwar mal als railway:position, mal als
+   * railway:position:exact. Am Meldepunkt bei Bischofswiesen stand der nächste
+   * Stein 1138 m entfernt, ein Bahnübergang mit railway:position:exact aber
+   * 596 m — mit der alten Abfrage (nur railway=milestone, nur 900 m) fiel genau
+   * dieser weg und die Kilometersuche brach ab. Beides mitnehmen und weiter
+   * hinausschauen; als Startwert für die ORM-Abfrage reicht ein grober Wert. */
   const q = `[out:json][timeout:25];` +
     `way(around:80,${lat},${lon})[railway~"^(rail|light_rail|narrow_gauge)$"][ref]->.w;` +
-    `node(around:900,${lat},${lon})[railway=milestone]->.n;` +
+    `node(around:${SEED_RADIUS},${lat},${lon})[railway]["railway:position"]->.n1;` +
+    `node(around:${SEED_RADIUS},${lat},${lon})[railway]["railway:position:exact"]->.n2;` +
     `.w out tags geom 40;` +
-    `.n out body 80;`;      // body, nicht tags — sonst fehlen die Koordinaten der Knoten
+    `(.n1;.n2;)->.n;` +
+    `.n out body 120;`;     // body, nicht tags — sonst fehlen die Koordinaten der Knoten
 
   let data = null, lastErr = null;
   for (const ep of OVERPASS) {
@@ -2495,11 +2686,14 @@ async function linesNear(lat, lon) {
     .slice(0, 4)
     .map(([ref, dist]) => ({ ref, dist }));
 
-  // Nächster Kilometerstein als Startwert — die ORM-API braucht eine Position,
+  // Nächste Kilometerangabe als Startwert — die ORM-API braucht eine Position,
   // um überhaupt etwas ausliefern zu können.
   const stones = els
-    .filter(n => n.type === 'node' && n.tags && n.tags['railway:position'] != null)
-    .map(n => ({ km: parseFloat(String(n.tags['railway:position']).replace(',', '.')), dist: haversine(lat, lon, n.lat, n.lon) }))
+    .filter(n => n.type === 'node' && n.tags)
+    .map(n => {
+      const roh = n.tags['railway:position'] != null ? n.tags['railway:position'] : n.tags['railway:position:exact'];
+      return { km: parseFloat(String(roh).replace(',', '.')), dist: haversine(lat, lon, n.lat, n.lon) };
+    })
     .filter(s => isFinite(s.km))
     .sort((a, b) => a.dist - b.dist);
 
@@ -2515,14 +2709,13 @@ async function lookupByClick(lat, lon) {
       showError('Hier ist keine nummerierte Strecke erfasst. Näher an ein Gleis tippen.');
       return;
     }
-    if (!seed) {
-      showError(`Strecke ${refs.map(r => r.ref).join(' / ')} liegt hier, aber im Umkreis von 900 m ist kein Kilometerstein erfasst — der Kilometer lässt sich nicht bestimmen.`);
-      return;
-    }
+    /* Ohne Kilometerangabe in der Nähe geht es trotzdem weiter: den Startwert
+     * holt sich useLineAt dann bei der Strecke selbst. */
+    const seedKm = seed ? seed.km : null;
     if (refs.length === 1) {
-      await useLineAt(refs[0].ref, seed.km, lat, lon);
+      await useLineAt(refs[0].ref, seedKm, lat, lon);
     } else {
-      showPicker(refs, seed.km, lat, lon);
+      showPicker(refs, seedKm, lat, lon);
     }
   } catch (err) {
     /* Overpass liefert die Gleisgeometrie und ist der einzige Weg, an beliebiger
@@ -2537,6 +2730,28 @@ async function lookupByClick(lat, lon) {
   }
 }
 
+/* Kein Stein in Reichweite? Dann die Strecke selbst befragen.
+ *
+ * Die ORM-API braucht zwar eine Position, liefert dafür aber gleich alles, was
+ * im Umkreis dieser Position erfasst ist — auf dünn belegten Strecken ist das
+ * mit einer Abfrage der halbe Streckenverlauf. Ein paar Startwerte abklappern
+ * genügt also, um überhaupt einen Anhaltspunkt zu bekommen. */
+async function seedAusApi(ref, lat, lon) {
+  const e = storeFor(ref);
+  const naechster = () => e.sorted.length
+    ? e.sorted.reduce((a, b) => haversine(lat, lon, b.lat, b.lon) < haversine(lat, lon, a.lat, a.lon) ? b : a)
+    : null;
+
+  for (const km of [0, 50, 100, 150]) {
+    const nah = naechster();
+    if (nah && haversine(lat, lon, nah.lat, nah.lon) < 6000) return nah.km;
+    if (e.probes.some(p => Math.abs(p - km) < 0.75)) continue;
+    try { await probe(ref, e, km); } catch { break; }
+  }
+  const nah = naechster();
+  return nah ? nah.km : null;
+}
+
 /** Strecke laden und den Klickpunkt darauf projizieren. */
 async function useLineAt(ref, seedKm, lat, lon) {
   setBusy(true);
@@ -2544,24 +2759,73 @@ async function useLineAt(ref, seedKm, lat, lon) {
   try {
     view.ref = ref;
     $('#ref').value = ref;
+
+    if (seedKm == null) {
+      showStatus(`Strecke ${ref}: keine Kilometerangabe in der Nähe — frage die Strecke ab …`);
+      seedKm = await seedAusApi(ref, lat, lon);
+      if (seedKm == null) {
+        showError(`Für Strecke ${ref} ist in OpenStreetMap kein einziger Kilometerpunkt erfasst — der Kilometer lässt sich nicht bestimmen.`);
+        return;
+      }
+    }
+
     await coverage(ref, seedKm);
     const e = lineCache.get(ref);
     drawMilestones();
 
     const hit = projectOnLine(e.sorted, lat, lon);
+    if (hit && hit.dist <= 400) {
+      applyPoint(ref, hit.km, {
+        lat: hit.lat, lon: hit.lon, quality: 'karte',
+        between: hit.between, offset: hit.dist, chord: hit.chord, spanRatio: hit.spanRatio,
+        operator: e.sorted[0].operator, lineRef: ref
+      });
+      return;
+    }
+
+    /* Sehne unbrauchbar — entweder stehen die nächsten Steine weiter als
+     * MAX_DRAW_GAP_KM auseinander und werden gar nicht erst verbunden, oder die
+     * Sehne schneidet einen Bogen so weit ab, dass der Punkt scheinbar
+     * hunderte Meter danebenliegt. Beides löst der echte Verlauf. */
+    const weit = projectOnLine(e.sorted, lat, lon, MAX_GAP_KM);
+    if (weit) {
+      /* Ehrliche Wartezeit: Der Abruf lief gemessen zwischen 5 und 20 s, und wenn
+       * Overpass überlastet ist, probiert die App der Reihe nach drei Instanzen
+       * durch — dann wird es deutlich länger. */
+      showStatus(`Die nächsten Kilometerangaben stehen bei km ${fmtKm(weit.between[0])} und ` +
+        `${fmtKm(weit.between[1])} — hole den Gleisverlauf dazwischen. Das dauert einige Sekunden, ` +
+        `bei überlastetem Overpass auch länger …`);
+      try {
+        const genau = await kmEntlangGleis(ref, lat, lon);
+        if (genau && genau.offset <= 400) {
+          const { pfad, ...punkt } = genau;      // der Verlauf gehört auf die Karte, nicht in den Zustand
+          applyPoint(ref, punkt.km, punkt);
+          zeichneGleisweg(pfad);
+          return;
+        }
+        if (genau) {
+          showError(`Der Punkt liegt ${nfM.format(genau.offset)} m vom Gleis der Strecke ${ref} entfernt — das wäre zu ungenau.`);
+          return;
+        }
+      } catch (err) {
+        /* Der Grund gehört dazu, sonst steht da nur „geht nicht": ohne Steinpaar
+         * ist der Verlauf der einzige Weg, mit Steinpaar nur der genauere. */
+        showError(hit
+          ? `Der Punkt liegt ${nfM.format(hit.dist)} m von der Verbindungslinie der Steine bei km ` +
+            `${fmtKm(hit.between[0])} und ${fmtKm(hit.between[1])} entfernt, und der Gleisverlauf ließ sich ` +
+            `nicht holen: ${err.message}.`
+          : `Zwischen km ${fmtKm(weit.between[0])} und ${fmtKm(weit.between[1])} ist kein Kilometerpunkt ` +
+            `erfasst, und der Gleisverlauf ließ sich nicht holen: ${err.message}. Ohne ihn lässt sich der ` +
+            `Kilometer hier nicht bestimmen.`);
+        return;
+      }
+    }
+
     if (!hit) {
-      showError(`Für Strecke ${ref} sind hier zu wenige Kilometersteine erfasst.`);
+      showError(`Für Strecke ${ref} sind hier zu wenige Kilometerangaben erfasst.`);
       return;
     }
-    if (hit.dist > 400) {
-      showError(`Der Punkt liegt ${nfM.format(hit.dist)} m von den erfassten Steinen der Strecke ${ref} entfernt — das wäre zu ungenau.`);
-      return;
-    }
-    applyPoint(ref, hit.km, {
-      lat: hit.lat, lon: hit.lon, quality: 'karte',
-      between: hit.between, offset: hit.dist, chord: hit.chord, spanRatio: hit.spanRatio,
-      operator: e.sorted[0].operator, lineRef: ref
-    });
+    showError(`Der Punkt liegt ${nfM.format(hit.dist)} m von den erfassten Steinen der Strecke ${ref} entfernt — das wäre zu ungenau.`);
   } catch (err) {
     showError('Konnte Strecke ' + ref + ' nicht laden: ' + err.message);
   } finally {
@@ -2602,6 +2866,9 @@ function applyPoint(ref, km, result) {
 function qualityTag(p) {
   if (p.quality === 'exakt') return { cls: 'ok', text: 'Kilometerstein' };
   if (p.quality === 'gleis') return { cls: 'ok', text: 'auf dem Gleis' };
+  /* Orange trotz der besseren Rechnung: Über so weite Steinabstände bleiben
+   * gemessen bis zu 88 m Unsicherheit, und die kommt aus den Steinen selbst. */
+  if (p.quality === 'karte-gleis') return { cls: 'warn', text: `entlang des Gleises ±${nfM.format(GLEIS_ERR.worst)} m` };
   if (p.quality === 'interpoliert') {
     // Schwelle bei 50 m: die beiden dichten Steinabstände bleiben grün,
     // orange wird es erst, wenn die Steine wirklich weit auseinanderstehen.
@@ -2652,6 +2919,21 @@ function renderBottom() {
       `${fmtKm(p.between[1])}, laut Kilometrierung ${nfM.format(p.nominal)} m. Der Punkt liegt damit ` +
       `${nfM.format(p.korrektur)} m von der geradlinigen Schätzung entfernt. Bleibt als Unsicherheit die ` +
       `Erfassungsgenauigkeit der Steine, Größenordnung 10 m.`;
+  } else if (p.quality === 'karte-gleis') {
+    detail = `Zwischen den Kilometerangaben bei km ${fmtKm(p.between[0])} und ${fmtKm(p.between[1])} ist ` +
+      `nichts weiter erfasst — ${nfM.format(p.chord)} m Luftlinie. Über so weite Lücken taugt die gerade ` +
+      `Verbindung nicht mehr, deshalb wurde der tatsächliche Gleisverlauf geholt und daran entlang gemessen: ` +
+      `${nfM.format(p.wegLaenge)} m Gleisweg, laut Kilometrierung ${nfM.format(p.nominal)} m. ` +
+      `Geradlinig käme km ${fmtKm(p.sehneKm)} heraus, ${nfM.format(Math.abs(view.km - p.sehneKm) * 1000)} m ` +
+      `daneben. An ${GLEIS_ERR.faelle} übersprungenen Zwischensteinen mit ähnlichem Abstand nachgemessen lag ` +
+      `dieser Weg typisch ${nfM.format(GLEIS_ERR.typical)} m neben dem wahren Kilometer und höchstens ` +
+      `${nfM.format(GLEIS_ERR.worst)} m; die geradlinige Ablesung traf im Mittel ebenso gut, lag aber in ` +
+      `${GLEIS_ERR.ueber100} der ${GLEIS_ERR.faelle} Fälle über 100 m daneben, bis zu ${nfM.format(GLEIS_ERR.sehne)} m. ` +
+      `Übrig bleibt die Erfassungsgenauigkeit der Steine, gegen die kein Gleisverlauf hilft.`;
+    if (p.offset > 150) {
+      warn = `<p class="bb-note">Der Punkt liegt ${nfM.format(p.offset)} m querab des Gleises. ` +
+        `Abgelesen wird die Stelle, an der das Lot auf das Gleis trifft.</p>`;
+    }
   } else if (p.quality === 'naechster') {
     warn = `<p class="bb-note">Bei km ${fmtKm(view.km)} ist kein Stein erfasst. Angezeigt wird der nächstgelegene bei km ${fmtKm(p.nearKm)} — ${fmtKm(Math.abs(p.delta))} km Unterschied.</p>`;
     if (p.verworfen && p.verworfen.grund === 'luecke') {

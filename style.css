@@ -558,6 +558,19 @@ body {
 .kml-pop a { display: inline-block; margin-top: 6px; color: var(--accent); }
 .kml-pop small { display: block; margin-top: 6px; color: var(--muted-2); font-size: .68rem; }
 
+/* Knopf in der Sprechblase — dieselbe Sprache wie die Feinrechnung unten,
+   nur schmaler, weil die Blase wenig Platz hat. */
+.kml-km {
+  display: block; width: 100%; margin-top: 9px;
+  padding: 7px 10px; border-radius: 9px; text-align: left; cursor: pointer;
+  font: inherit; font-size: .8rem; font-weight: 650;
+  border: 1px solid color-mix(in srgb, var(--ok) 45%, transparent);
+  background: color-mix(in srgb, var(--ok) 13%, transparent);
+  color: var(--ok);
+}
+.kml-km small { margin-top: 1px; color: var(--muted); font-weight: 400; }
+.kml-km:active { filter: brightness(1.15); }
+
 .fine { font-size: .74rem; color: var(--muted); line-height: 1.6; margin: 0 0 8px; }
 .fine:last-child { margin-bottom: 0; }
 .fine strong { color: var(--text); }
