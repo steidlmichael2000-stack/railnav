@@ -185,7 +185,19 @@ def kodieren(pts, faktor=1e5):
 
 
 def schluessel(lat, lon):
-    return (round(lat, 5), round(lon, 5))
+    """Koordinate als eine einzige ganze Zahl.
+
+    Nicht als Tupel zweier Fliesskommazahlen: Die Verzweigungssuche unten legt
+    einen Eintrag je Stuetzpunkt an, und bei ueber zwei Millionen davon ist der
+    Unterschied zwischen 28 und 120 Byte je Eintrag mehrere hundert Megabyte.
+
+    Gerundet wird dabei genauso wie in kodieren(), also int(round(x * 1e5)) und
+    nicht round(x, 5). Die beiden weichen bei knapp einem Prozent der Punkte um
+    die letzte Stelle voneinander ab, und massgeblich ist die Rundung, die
+    nachher tatsaechlich in der Datei steht: Was gleich geschrieben wird, soll
+    hier auch als derselbe Punkt gelten.
+    """
+    return (int(round(lat * 1e5)) + 9000000) * 100000000 + int(round(lon * 1e5)) + 18000000
 
 
 def vereinfachen(wege):
@@ -198,17 +210,23 @@ def vereinfachen(wege):
     Deshalb erst zaehlen, wo sich Wege beruehren, und nur zwischen diesen
     Punkten vereinfachen.
     """
-    zahl = {}
+    # Zwei Mengen statt einer Zaehltabelle: gebraucht wird nur "mehr als einmal
+    # gesehen", und ein Wert je Eintrag ist Speicher, den es nicht kostet.
+    einmal, mehrfach = set(), set()
     for _, pts in wege:
         for p in pts:
             k = schluessel(*p)
-            zahl[k] = zahl.get(k, 0) + 1
+            if k in einmal:
+                mehrfach.add(k)
+            else:
+                einmal.add(k)
+    einmal = None
 
     raus = []
     for ref, pts in wege:
         fest = set([0, len(pts) - 1])
         for i in range(1, len(pts) - 1):
-            if zahl.get(schluessel(*pts[i]), 0) > 1:
+            if schluessel(*pts[i]) in mehrfach:
                 fest.add(i)
         fest = sorted(fest)
         neu = []

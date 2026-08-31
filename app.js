@@ -520,10 +520,21 @@ function netzBereit() {
   return netzIndexHolen;
 }
 
+/* Entschlüsselte Kacheln bleiben liegen, aber nicht beliebig viele: Eine dichte
+ * Kachel bringt einige zehntausend Stützpunkte mit, und wer quer durchs Land
+ * fährt, sammelt sonst alles ein. Zwölf Kacheln sind rund 150 x 150 km um den
+ * Arbeitsplatz herum — mehr braucht niemand gleichzeitig, und die Datei ist
+ * über den Zwischenspeicher des Browsers sofort wieder da. */
+const NETZ_KACHELN_MAX = 12;
 const netzKacheln = new Map();     // Name → Versprechen auf {wege, punkte}
 
 function netzKachel(name) {
-  if (!netzKacheln.has(name)) {
+  if (netzKacheln.has(name)) {
+    // Wieder ans Ende der Map, damit die älteste zuerst weicht
+    const p = netzKacheln.get(name);
+    netzKacheln.delete(name);
+    netzKacheln.set(name, p);
+  } else {
     netzKacheln.set(name, (async () => {
       try {
         const r = await fetch(`${NETZ_PFAD}t_${name}.json`);
@@ -547,6 +558,9 @@ function netzKachel(name) {
         return null;
       }
     })());
+    while (netzKacheln.size > NETZ_KACHELN_MAX) {
+      netzKacheln.delete(netzKacheln.keys().next().value);
+    }
   }
   return netzKacheln.get(name);
 }
