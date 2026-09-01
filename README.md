@@ -682,6 +682,13 @@ Kacheln und halb aus dem Netz zu antworten hieße, stillschweigend Gleise zu ver
 bleibt ebenso der Rückfall, wenn die Kachel keinen durchgehenden Weg hergibt — die weggelassenen
 Rangiergleise können an einer Stelle genau die fehlende Verbindung sein.
 
+**Ein leeres Ergebnis ist dagegen eine Antwort und kein Rückfallgrund.** Die Kacheln führen jede
+nummerierte Strecke, die Overpass hier fände: Der erste Durchgang holt alle Gleise ohne
+`service`-Tag, der zweite alles, was trotz `service`-Tag eine Nummer trägt — zusammen also jeden
+Weg mit `ref`. Sagt die Kachel „hier liegt keine nummerierte Strecke", stimmt das. Anfangs wurde
+trotzdem noch Overpass gefragt, und ein Tipp ins Feld brauchte darum eine halbe Minute bis zur
+Fehlermeldung; jetzt sind es gemessen 10 bis 67 ms.
+
 Der Service Worker legt Kacheln „erst Cache" ab, anders als alle übrigen eigenen Dateien: Sie
 ändern sich nur, wenn der Erzeuger neu läuft, und dann wird ohnehin `VERSION` in `sw.js`
 hochgezählt.

@@ -3249,9 +3249,17 @@ function startwerte(kandidaten) {
 }
 
 async function linesNear(lat, lon) {
-  // Erst das Mitgelieferte — das ist sofort da und hängt an keinem fremden Dienst
+  /* Erst das Mitgelieferte — das ist sofort da und hängt an keinem fremden Dienst.
+   *
+   * Auch ein leeres Ergebnis zählt: Die Kacheln führen jede nummerierte Strecke,
+   * die Overpass hier fände. Der erste Durchgang holt alle Gleise ohne
+   * service-Tag, der zweite alles, was trotz service-Tag eine Nummer trägt —
+   * zusammen also jeden Weg mit ref. Sagt die Kachel „hier liegt keine
+   * nummerierte Strecke", dann stimmt das, und danach noch Overpass zu fragen
+   * kostet nur die Wartezeit. Gemeldet als „wenn man zu weit vom Gleis weg
+   * drückt, braucht die Meldung ewig". */
   const lokal = await netzLinesNear(lat, lon);
-  if (lokal && lokal.refs.length) return lokal;
+  if (lokal) return lokal;
 
   /* Kilometerangaben hängen nicht nur an Steinen: Bahnübergänge, Signale und
    * Weichen tragen sie genauso, und zwar mal als railway:position, mal als
