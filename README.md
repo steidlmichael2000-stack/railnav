@@ -364,6 +364,24 @@ die 80-m-Grenze in 42 % der Fälle**; Anhängen an der Kante ergibt 1 m und in *
 Wegsuche ist also seit den Kacheln in fast jedem zweiten Fall still gescheitert. Jetzt wird auf
 die Kante projiziert und dort ein Knoten eingefügt.
 
+**1b. Und selbst eingehängt hing es im falschen Teil.** Kaum war das behoben, kam der nächste
+Bericht: Sprünge zwischen km 95 und 98 der Strecke 5321 hingen 40 Sekunden. Beide Steine hängten
+sich auf **1 m** ein — und trotzdem fand die Wegsuche keinen Weg. Grund: Das Gleisnetz zerfällt in
+den Kacheln stellenweise in mehrere Teile, und die geometrisch nächste Kante gehört dann womöglich
+zu einem abgehängten Stummel, während das durchgehende Gleis zwei Meter weiter liegt. Ohne Weg
+fiel die App auf Overpass zurück — daher die 40 Sekunden.
+
+Jetzt werden erst die Zusammenhangskomponenten bestimmt und beide Steine in dieselbe eingehängt.
+Über **2978 Steinpaare** geprüft:
+
+| | verbunden |
+| --- | --- |
+| nächste Kante, ohne Rücksicht auf den Zusammenhang | 2187 (**73,4 %**) |
+| Komponente wählen, in der beide Steine liegen | 2977 (**100,0 %**) |
+
+Jedes vierte Steinpaar lief also in die Overpass-Wartezeit. Übrig bleibt ein einziges Paar
+(Strecke 3530, km 30,2–30,4, bester Abstand 99 m bei zehn Teilstücken im Ausschnitt).
+
 **2. Der Suchradius für den Startwert war 38 m zu klein.** Der nächste Kilometerpunkt lag 4038 m
 entfernt, der Radius bei 4000 m. Die Suche fiel auf einen Notbehelf zurück, der die falsche Seite
 erwischte. Der Radius steht jetzt bei 12 km — unbedenklich, weil sich die Punkte aus den Kacheln
@@ -653,6 +671,11 @@ Geholt wird immer nur, worauf man steht. Am Server gemessen:
 | `t_102_13` (Ruhrgebiet, die größte) | 216 kB | 85 kB |
 
 Median über alle Kacheln: 21 kB roh.
+
+Die Kacheln kommen **beim ersten Hinschauen** aufs Gerät und bleiben dort. Wer ohne Empfang in
+eine Gegend fährt, deren Kachel er noch nie geladen hat, bekommt deshalb weder aus den Kacheln
+noch von Overpass eine Antwort — und die Fehlermeldung sagt das dann auch so, statt es auf
+Overpass zu schieben.
 
 **Fehlt auch nur eine berührte Kachel, geht die Anfrage vollständig über Overpass.** Halb aus
 Kacheln und halb aus dem Netz zu antworten hieße, stillschweigend Gleise zu verlieren. Overpass

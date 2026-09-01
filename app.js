@@ -742,12 +742,13 @@ function buildGraph(ways) {
  * Deshalb wird auf die Kante projiziert und, wenn der Fuß mittendrin liegt,
  * ein Knoten eingefügt. Die ursprüngliche Kante bleibt daneben stehen; sie ist
  * genauso lang wie der Umweg über den neuen Knoten und stört deshalb nicht. */
-function einhaengen(nodes, lat, lon) {
+function naechsteKante(nodes, lat, lon, erlaubt) {
   const ky = 110540, kx = Math.cos(lat * Math.PI / 180) * 111320;
   const px = lon * kx, py = lat * ky;
   let best = null;
 
-  for (const n1 of nodes.values()) {
+  for (const [k1, n1] of nodes) {
+    if (erlaubt && !erlaubt(k1)) continue;
     const ax = n1.lon * kx, ay = n1.lat * ky;
     for (const [k2] of n1.adj) {
       const n2 = nodes.get(k2);
@@ -758,22 +759,24 @@ function einhaengen(nodes, lat, lon) {
       const cx = ax + t * dx, cy = ay + t * dy;
       const dist = Math.hypot(px - cx, py - cy);
       if (!best || dist < best.dist) {
-        best = { dist, t, von: n1, nach: k2, lat: cy / ky, lon: cx / kx };
+        best = { dist, t, von: k1, nach: k2, lat: cy / ky, lon: cx / kx };
       }
     }
   }
-  if (!best) return { key: null, dist: Infinity };
+  return best;
+}
 
-  // Endpunkt genau getroffen? Dann keinen zusätzlichen Knoten anlegen.
-  const schluessel = n => n.lat.toFixed(7) + ',' + n.lon.toFixed(7);
-  if (best.t <= 1e-9) return { key: schluessel(best.von), dist: best.dist };
+/** Die gefundene Stelle wirklich als Knoten einsetzen. */
+function einfuegen(nodes, best) {
+  if (!best) return { key: null, dist: Infinity };
+  if (best.t <= 1e-9) return { key: best.von, dist: best.dist };
   if (best.t >= 1 - 1e-9) return { key: best.nach, dist: best.dist };
 
   const key = best.lat.toFixed(7) + ',' + best.lon.toFixed(7);
   if (!nodes.has(key)) {
     const neu = { lat: best.lat, lon: best.lon, adj: [] };
     nodes.set(key, neu);
-    for (const k of [schluessel(best.von), best.nach]) {
+    for (const k of [best.von, best.nach]) {
       const n = nodes.get(k);
       if (!n) continue;
       const d = haversine(neu.lat, neu.lon, n.lat, n.lon);
@@ -782,6 +785,31 @@ function einhaengen(nodes, lat, lon) {
     }
   }
   return { key, dist: best.dist };
+}
+
+function einhaengen(nodes, lat, lon, erlaubt) {
+  return einfuegen(nodes, naechsteKante(nodes, lat, lon, erlaubt));
+}
+
+/** Zusammenhangskomponenten: Knotenschlüssel → Nummer. */
+function komponenten(nodes) {
+  const teil = new Map();
+  let nr = 0;
+  for (const start of nodes.keys()) {
+    if (teil.has(start)) continue;
+    const stapel = [start];
+    teil.set(start, nr);
+    while (stapel.length) {
+      const k = stapel.pop();
+      for (const [nk] of nodes.get(k).adj) {
+        if (teil.has(nk)) continue;
+        teil.set(nk, nr);
+        stapel.push(nk);
+      }
+    }
+    nr++;
+  }
+  return teil;
 }
 
 /** Kleinster Eintrag zuerst — ein Binärhaufen, damit Dijkstra nicht jedes Mal
@@ -920,13 +948,25 @@ function zeichneGleisweg(path) {
  * kein brauchbarer Weg findet, muss Overpass ran. Der Rückfall ist wichtig:
  * Die Kacheln lassen Anschluss- und Rangiergleise weg, und an einer Stelle,
  * wo der Verlauf ausgerechnet darüber führt, käme sonst gar nichts heraus. */
+/* Rand um die Sehne, damit Bögen mitkommen, die daneben ausschlagen. Fest
+ * 0,012° (gut 1,3 km) reichten nur bei kurzen Abständen: Zwischen den Steinen
+ * bei km 87,2 und 96,2 der Strecke 5321 lief das Gleis aus dem Ausschnitt
+ * heraus, der Weg wurde nicht gefunden und die Suche fiel auf Overpass zurück.
+ * Mit dem Abstand wachsen lassen, aber gedeckelt. */
+const verlaufRand = (A, B) => Math.min(0.06, 0.012 + Math.abs(B.km - A.km) * 0.002);
+
+/** Liegt der Verlauf zwischen diesen Steinen mitgeliefert vor? Nur für die
+ *  Wortwahl der Statusmeldung — die Kachel ist danach im Speicher. */
+async function netzHatVerlauf(A, B) {
+  const pad = verlaufRand(A, B);
+  const b = await netzBereich(
+    Math.min(A.lat, B.lat) - pad, Math.min(A.lon, B.lon) - pad,
+    Math.max(A.lat, B.lat) + pad, Math.max(A.lon, B.lon) + pad);
+  return !!(b && b.wege.length);
+}
+
 async function gleisWegZwischen(A, B, nurLokal = false) {
-  /* Rand um die Sehne, damit Bögen mitkommen, die daneben ausschlagen. Fest
-   * 0,012° (gut 1,3 km) reichten nur bei kurzen Abständen: Zwischen den Steinen
-   * bei km 87,2 und 96,2 der Strecke 5321 lief das Gleis aus dem Ausschnitt
-   * heraus, der Weg wurde nicht gefunden und die Suche fiel auf Overpass zurück.
-   * Mit dem Abstand wachsen lassen, aber gedeckelt. */
-  const pad = Math.min(0.06, 0.012 + Math.abs(B.km - A.km) * 0.002);
+  const pad = verlaufRand(A, B);
   const lokal = await netzBereich(
     Math.min(A.lat, B.lat) - pad, Math.min(A.lon, B.lon) - pad,
     Math.max(A.lat, B.lat) + pad, Math.max(A.lon, B.lon) + pad);
@@ -947,12 +987,31 @@ function wegAusWegen(ways, A, B) {
   const nodes = buildGraph(ways);
   if (nodes.size > 60000) throw new Error('zu viele Gleise im Ausschnitt');
 
-  const na = einhaengen(nodes, A.lat, A.lon);
-  const nb = einhaengen(nodes, B.lat, B.lon);
-  if (na.dist > 80 || nb.dist > 80) {
-    throw new Error(`die Steine liegen bis ${nfM.format(Math.max(na.dist, nb.dist))} m vom nächsten Gleis entfernt`);
+  /* Beide Steine in dieselbe Zusammenhangskomponente einhängen.
+   *
+   * Die geometrisch nächste Kante genügt nicht: In den Kacheln zerfällt das
+   * Gleisnetz an manchen Stellen in mehrere Teile, und ein Stein sitzt dann
+   * womöglich einen Meter neben einem abgehängten Stummel, während das
+   * durchgehende Gleis zwei Meter weiter liegt. Gemeldet an Strecke 5321
+   * zwischen km 96,42 und 100,0: Beide Steine hingen sich auf 1 m ein, und
+   * trotzdem gab es keinen Weg — sie hingen in verschiedenen Teilen. */
+  const teil = komponenten(nodes);
+  let wahl = null;
+  for (const nr of new Set(teil.values())) {
+    const drin = k => teil.get(k) === nr;
+    const a = naechsteKante(nodes, A.lat, A.lon, drin);
+    const b = naechsteKante(nodes, B.lat, B.lon, drin);
+    if (!a || !b) continue;
+    const schlechter = Math.max(a.dist, b.dist);
+    if (!wahl || schlechter < wahl.schlechter) wahl = { a, b, schlechter };
+  }
+  if (!wahl) throw new Error('keine Gleisgeometrie im Ausschnitt');
+  if (wahl.schlechter > 80) {
+    throw new Error(`die Steine liegen bis ${nfM.format(wahl.schlechter)} m vom nächsten durchgehenden Gleis entfernt`);
   }
 
+  const na = einfuegen(nodes, wahl.a);
+  const nb = einfuegen(nodes, wahl.b);
   const sp = shortestPath(nodes, na.key, nb.key);
   if (!sp) throw new Error('kein durchgehender Gleisweg zwischen den beiden Steinen');
 
@@ -1054,9 +1113,21 @@ async function extrapolieren(ref, km, sorted) {
 
   const nodes = buildGraph(gleise);
   if (!nodes.size || nodes.size > 60000) return null;
-  const na = einhaengen(nodes, A.lat, A.lon);
-  const nb = einhaengen(nodes, B.lat, B.lon);
-  if (na.dist > 80 || nb.dist > 80) return null;
+  // Auch hier beide Steine in dieselbe Zusammenhangskomponente — sonst läuft
+  // der Lauf auf einem abgehängten Stummel los.
+  const teil = komponenten(nodes);
+  let wahl = null;
+  for (const nr of new Set(teil.values())) {
+    const drin = k => teil.get(k) === nr;
+    const a = naechsteKante(nodes, A.lat, A.lon, drin);
+    const b = naechsteKante(nodes, B.lat, B.lon, drin);
+    if (!a || !b) continue;
+    const schlechter = Math.max(a.dist, b.dist);
+    if (!wahl || schlechter < wahl.schlechter) wahl = { a, b, schlechter };
+  }
+  if (!wahl || wahl.schlechter > 80) return null;
+  const na = einfuegen(nodes, wahl.a);
+  const nb = einfuegen(nodes, wahl.b);
 
   const ziel = entlangLaufen(nodes, na.key, nodes.get(nb.key), hinaus);
   if (!ziel) return null;
@@ -3110,6 +3181,18 @@ function distToWay(lat, lon, geometry) {
 /** Welche Strecke liegt an dieser Stelle? Das kann nur Overpass beantworten.
  *  Die Kandidaten werden nach echtem Abstand zum Klick sortiert — an einem
  *  Bahnhof liegen sonst ein halbes Dutzend gleichrangiger Nummern nebeneinander. */
+/** Wie steht es an dieser Stelle um das mitgelieferte Netz?
+ *  'aus' kein Index · 'draussen' außerhalb des erzeugten Gebiets ·
+ *  'fehlt' erzeugt, aber nicht auf dem Gerät · 'da' vorhanden. */
+async function netzLage(lat, lon) {
+  const ix = await netzBereit();
+  if (!ix) return 'aus';
+  const name = Math.floor(lat / ix.raster) + '_' + Math.floor(lon / ix.raster);
+  if (!ix.da.has(name)) return 'draussen';
+  if (!ix.mitInhalt.has(name)) return 'da';        // erzeugt und nachweislich leer
+  return (await netzKachel(name)) ? 'da' : 'fehlt';
+}
+
 /** Dieselbe Auskunft wie linesNear, nur aus den mitgelieferten Kacheln. */
 async function netzLinesNear(lat, lon) {
   const dLat = SEED_RADIUS / 110540;
@@ -3242,13 +3325,22 @@ async function lookupByClick(lat, lon) {
       showPicker(refs, seeds, lat, lon);
     }
   } catch (err) {
-    /* Overpass liefert die Gleisgeometrie und ist der einzige Weg, an beliebiger
-     * Stelle herauszufinden, welche Strecke dort liegt. Die Meldung soll deshalb
-     * sagen, was fehlt und wie es trotzdem weitergeht. */
-    showError(`Hier ließ sich nicht ermitteln, welche Strecke liegt: ${err.message}. ` +
-      `Die Abfrage läuft über den fremden Dienst Overpass, der häufig überlastet ist. ` +
-      `Mit Streckennummer und Kilometer oben geht es ohne ihn — oder näher an ein Gleis der ` +
-      `schon geladenen Strecke tippen.`);
+    /* Die Meldung soll den wahren Grund nennen. Overpass ist nur noch der
+     * Rückfall; wer im Gelände ohne Netz auf eine Stelle tippt, deren Kachel
+     * noch nie geladen wurde, scheitert nicht an Overpass, sondern daran, dass
+     * die Kachel fehlt — und genau das gehört dort hin. */
+    const lage = await netzLage(lat, lon);
+    showError(lage === 'fehlt'
+      ? `Für diese Gegend ist das Gleisnetz noch nicht auf dem Gerät, und ohne Netz lässt es ` +
+        `sich nicht holen (${err.message}). Kacheln kommen beim ersten Hinschauen mit Empfang ` +
+        `aufs Gerät und bleiben dann da. Mit Streckennummer und Kilometer oben geht es auch so, ` +
+        `sofern die Strecke schon einmal geladen war.`
+      : lage === 'draussen'
+      ? `Diese Stelle liegt außerhalb des mitgelieferten Gleisnetzes, und der Rückfall auf den ` +
+        `fremden Dienst Overpass hat nicht geantwortet (${err.message}). Mit Streckennummer und ` +
+        `Kilometer oben geht es ohne ihn.`
+      : `Hier ließ sich nicht ermitteln, welche Strecke liegt: ${err.message}. Näher an ein Gleis ` +
+        `tippen — oder mit Streckennummer und Kilometer oben suchen.`);
   } finally {
     setBusy(false);
   }
@@ -3319,12 +3411,15 @@ async function useLineAt(ref, seeds, lat, lon) {
      * hunderte Meter danebenliegt. Beides löst der echte Verlauf. */
     const weit = projectOnLine(e.sorted, lat, lon, MAX_GLEIS_GAP_KM);
     if (weit) {
-      /* Ehrliche Wartezeit: Der Abruf lief gemessen zwischen 5 und 20 s, und wenn
-       * Overpass überlastet ist, probiert die App der Reihe nach drei Instanzen
-       * durch — dann wird es deutlich länger. */
+      /* Nur von Overpass reden, wenn es auch Overpass wird. Aus der Kachel ist
+       * der Verlauf in rund einer Zehntelsekunde da; die Warnung vor
+       * Wartezeiten stand hier noch aus der Zeit davor. */
+      const daheim = await netzHatVerlauf(weit.a, weit.b);
       showStatus(`Die nächsten Kilometerangaben stehen bei km ${fmtKm(weit.between[0])} und ` +
-        `${fmtKm(weit.between[1])} — hole den Gleisverlauf dazwischen. Das dauert einige Sekunden, ` +
-        `bei überlastetem Overpass auch länger …`);
+        `${fmtKm(weit.between[1])} — ` + (daheim
+          ? `rechne am mitgelieferten Gleisverlauf entlang …`
+          : `hole den Gleisverlauf von Overpass. Das dauert einige Sekunden, ` +
+            `bei überlastetem Overpass auch länger …`));
       try {
         const genau = await kmEntlangGleis(ref, lat, lon);
         if (genau && genau.offset <= 400) {
