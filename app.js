@@ -324,6 +324,12 @@ async function resolvePoint(ref, km) {
     }
   }
 
+  // Jenseits des äußersten Steins: am Gleis entlang hinauslaufen statt aufgeben
+  if (e.sorted.length > 1) {
+    const hinaus = await extrapolieren(ref, km, e.sorted);
+    if (hinaus) return hinaus;
+  }
+
   const near = e.sorted.reduce((a, b) => Math.abs(b.km - km) < Math.abs(a.km - km) ? b : a);
   return {
     lat: near.lat, lon: near.lon, quality: 'naechster',
@@ -436,6 +442,16 @@ function tapError(chordM) {
  * Deshalb wird hier gerechnet und nicht geschätzt, obwohl der Median dasselbe
  * sagt. Die Streuung des Vergleichssteins steckt in beiden Zahlen mit drin. */
 const GLEIS_ERR = { typical: 21, worst: 88, sehne: 186, ueber100: 3, faelle: 13 };
+
+/* Und jenseits des äußersten Steins, wo es gar kein Paar mehr gibt.
+ *
+ * Nachgemessen an 148 Außensteinen: den äußersten übersprungen, vom nächsten
+ * aus am Gleis entlang hinausgelaufen und mit seiner wahren Lage verglichen.
+ * Mit der Selbstprobe (siehe extrapolieren()) bleiben 127 Fälle übrig — Median
+ * 35 m, ungünstiges Zehntel 93 m, schlechtester 746 m. Der nächstgelegene
+ * Stein, den die App vorher zeigte, lag im Median 264 m daneben. Besser in 119
+ * von 127 Fällen. */
+const EXTRA_ERR = { typical: 35, worst: 93, stein: 264, faelle: 148 };
 
 /** Nächster Punkt auf dem Streckenzug der Kilometersteine — liefert auch den Kilometer dort.
  *
@@ -951,6 +967,117 @@ function wegAusWegen(ways, A, B) {
   return { path: sp.path, length: sp.length, nominal };
 }
 
+/* ============================ Über den letzten Stein hinaus ============================ */
+
+/* Wo die Kilometrierung anfängt oder aufhört, gab es bisher gar nichts: Für
+ * einen Kilometer jenseits des äußersten Steins fehlt das einschließende Paar,
+ * und die App zeigte den nächstgelegenen Stein mit „1,0 km daneben".
+ *
+ * Mit dem mitgelieferten Verlauf lässt sich stattdessen vom äußersten Stein aus
+ * am Gleis entlanglaufen. Dass die Trasse dabei über den Nullpunkt hinausgeht,
+ * ist kein Widerspruch — die Kilometrierungslinie beginnt oft später als die
+ * Achse.
+ */
+const EXTRA_MAX_M = 3000;      // so weit hinaus reichen die Messwerte
+const EXTRA_PROBE_M = 100;     // so nah muss die Selbstprobe den Nachbarstein treffen
+
+/** Richtung von a nach b in Grad. */
+function peilung(a, b) {
+  const lat = (a.lat + b.lat) / 2 * Math.PI / 180;
+  return (Math.atan2((b.lon - a.lon) * Math.cos(lat), b.lat - a.lat) * 180 / Math.PI + 360) % 360;
+}
+
+/** Am Gleis entlanglaufen, an jeder Weiche geradeaus.
+ *
+ * Bewusst nicht Dijkstra: Der kürzeste Weg sucht sich an einer Verzweigung
+ * irgendeinen Ast und landet auf dem Nachbargleis. Eine Strecke folgt aber dem
+ * geraden Durchgang — an einer Weiche biegt das durchgehende Hauptgleis nicht ab.
+ */
+function entlangLaufen(nodes, startKey, wegVon, strecke) {
+  const start = nodes.get(startKey);
+  if (!start || !start.adj.length) return null;
+
+  const abstand = k => haversine(nodes.get(k).lat, nodes.get(k).lon, wegVon.lat, wegVon.lon);
+  let vorher = startKey;
+  let jetzt = start.adj.map(([k]) => k).reduce((a, b) => abstand(b) > abstand(a) ? b : a);
+  if (abstand(jetzt) < haversine(start.lat, start.lon, wegVon.lat, wegVon.lon)) return null;
+
+  let gelaufen = haversine(start.lat, start.lon, nodes.get(jetzt).lat, nodes.get(jetzt).lon);
+  const besucht = new Set([startKey, jetzt]);
+
+  while (gelaufen < strecke) {
+    const ein = peilung(nodes.get(vorher), nodes.get(jetzt));
+    const weiter = nodes.get(jetzt).adj
+      .map(([k]) => k).filter(k => k !== vorher && !besucht.has(k));
+    if (!weiter.length) return null;
+
+    const kurve = k => Math.abs(((peilung(nodes.get(jetzt), nodes.get(k)) - ein + 540) % 360) - 180);
+    const naechst = weiter.reduce((a, b) => kurve(b) < kurve(a) ? b : a);
+    if (kurve(naechst) > 75) return null;          // das ist ein Abzweig, keine Fortsetzung
+
+    const a = nodes.get(jetzt), b = nodes.get(naechst);
+    const d = haversine(a.lat, a.lon, b.lat, b.lon);
+    if (gelaufen + d >= strecke) {
+      const t = d > 0 ? (strecke - gelaufen) / d : 0;
+      return { lat: a.lat + t * (b.lat - a.lat), lon: a.lon + t * (b.lon - a.lon) };
+    }
+    gelaufen += d;
+    besucht.add(naechst);
+    vorher = jetzt;
+    jetzt = naechst;
+  }
+  return { lat: nodes.get(jetzt).lat, lon: nodes.get(jetzt).lon };
+}
+
+/** Kilometer jenseits des äußersten Steins — nur aus den mitgelieferten Kacheln. */
+async function extrapolieren(ref, km, sorted) {
+  const erster = sorted[0], letzter = sorted[sorted.length - 1];
+  const unten = km < erster.km;
+  if (!unten && km <= letzter.km) return null;
+
+  const A = unten ? erster : letzter;
+  const B = unten ? sorted[1] : sorted[sorted.length - 2];
+  if (!B || !segmentOk(unten ? A : B, unten ? B : A, MAX_GLEIS_GAP_KM)) return null;
+
+  const hinaus = Math.abs(A.km - km) * 1000;
+  if (hinaus > EXTRA_MAX_M) return null;
+
+  const weite = (hinaus + haversine(A.lat, A.lon, B.lat, B.lon)) * 1.6;
+  const dLat = Math.max(0.02, weite / 110540);
+  const dLon = dLat / Math.max(0.2, Math.cos(A.lat * Math.PI / 180));
+  const bereich = await netzBereich(A.lat - dLat, A.lon - dLon, A.lat + dLat, A.lon + dLon);
+  if (!bereich) return null;
+
+  const gleise = bereich.wege.filter(w =>
+    w.ref && String(w.ref).split(';').some(t => t.trim() === String(ref)));
+  if (!gleise.length) return null;
+
+  const nodes = buildGraph(gleise);
+  if (!nodes.size || nodes.size > 60000) return null;
+  const na = einhaengen(nodes, A.lat, A.lon);
+  const nb = einhaengen(nodes, B.lat, B.lon);
+  if (na.dist > 80 || nb.dist > 80) return null;
+
+  const ziel = entlangLaufen(nodes, na.key, nodes.get(nb.key), hinaus);
+  if (!ziel) return null;
+
+  /* Selbstprobe: mit demselben Verfahren die bekannte Strecke zum Nachbarstein
+   * laufen. Trifft es dort nicht, hat der Lauf hier nichts zu suchen. An 148
+   * Fällen nachgemessen fängt das genau die Ausreißer ab — ohne Probe bis zu
+   * 4333 m daneben, mit Probe höchstens 746 m, und in 119 von 127 Fällen besser
+   * als der nächstgelegene Stein. */
+  const probe = entlangLaufen(nodes, na.key, ziel, Math.abs(B.km - A.km) * 1000);
+  if (!probe) return null;
+  const treffer = haversine(B.lat, B.lon, probe.lat, probe.lon);
+  if (treffer > EXTRA_PROBE_M) return null;
+
+  return {
+    lat: ziel.lat, lon: ziel.lon, quality: 'extrapoliert',
+    hinaus, abStein: A.km, probe: treffer,
+    operator: A.operator, lineRef: A.ref || ref
+  };
+}
+
 /* Position → Kilometer entlang des echten Gleisverlaufs.
  *
  * Die Sehnenrechnung braucht zwei Steine, die nah genug beieinanderstehen —
@@ -981,6 +1108,34 @@ async function kmEntlangGleis(ref, lat, lon, nurLokal = false) {
     chord: grob.chord, wegLaenge: weg.length, nominal: weg.nominal,
     sehneKm: grob.km, pfad: weg.path,
     operator: grob.a.operator || grob.b.operator, lineRef: grob.a.ref || ref
+  };
+}
+
+/* Geradlinig interpoliert, obwohl der Verlauf mitgeliefert ist? Dann gleich
+ * darauf rechnen.
+ *
+ * Der Knopf „Punkt auf das Gleis rechnen" bleibt für alles, was über Overpass
+ * geht — dort kostet es 15 bis 40 s und lohnt erst ab REFINE_MIN_CHORD. Aus der
+ * Kachel dauert es 34 ms, und dann gibt es keinen Grund, dem Nutzer eine
+ * Schätzung hinzulegen, die er erst wegdrücken muss: An Strecke 5321 km 99,0
+ * lag die Gerade 375 m neben dem Gleis. */
+async function gleisGenau(ref, km, res) {
+  if (!res || res.quality !== 'interpoliert') return res;
+  const store = lineCache.get(ref);
+  const A = store && store.sorted.find(x => Math.abs(x.km - res.between[0]) < 1e-6);
+  const B = store && store.sorted.find(x => Math.abs(x.km - res.between[1]) < 1e-6);
+  if (!A || !B) return res;
+
+  let weg = null;
+  try { weg = await gleisWegZwischen(A, B, true); } catch { return res; }
+  if (!weg) return res;
+
+  const t = (km - A.km) / (B.km - A.km);
+  const pos = pointAlong(weg.path, t * weg.length);
+  return {
+    ...res, lat: pos.lat, lon: pos.lon, quality: 'gleis',
+    korrektur: haversine(res.lat, res.lon, pos.lat, pos.lon),
+    wegLaenge: weg.length, nominal: weg.nominal, pfad: weg.path
   };
 }
 
@@ -3247,6 +3402,7 @@ function qualityTag(p) {
   /* Orange trotz der besseren Rechnung: Über so weite Steinabstände bleiben
    * gemessen bis zu 88 m Unsicherheit, und die kommt aus den Steinen selbst. */
   if (p.quality === 'karte-gleis') return { cls: 'warn', text: `entlang des Gleises ±${nfM.format(GLEIS_ERR.worst)} m` };
+  if (p.quality === 'extrapoliert') return { cls: 'warn', text: `hinausgerechnet ±${nfM.format(EXTRA_ERR.worst)} m` };
   if (p.quality === 'interpoliert') {
     // Schwelle bei 50 m: die beiden dichten Steinabstände bleiben grün,
     // orange wird es erst, wenn die Steine wirklich weit auseinanderstehen.
@@ -3311,6 +3467,21 @@ function renderBottom() {
     if (p.offset > 150) {
       warn = `<p class="bb-note">Der Punkt liegt ${nfM.format(p.offset)} m querab des Gleises. ` +
         `Abgelesen wird die Stelle, an der das Lot auf das Gleis trifft.</p>`;
+    }
+  } else if (p.quality === 'extrapoliert') {
+    detail = `Bei km ${fmtKm(view.km)} ist kein Stein erfasst, und es gibt auch keinen davor — ` +
+      `die Kilometrierung fängt hier erst an oder hört auf. Statt den nächstgelegenen Stein zu ` +
+      `zeigen, wurde vom Stein bei km ${fmtKm(p.abStein)} aus ${nfM.format(p.hinaus)} m am Gleis ` +
+      `entlang hinausgelaufen, an jeder Weiche geradeaus. Dass die Trasse dabei über den Nullpunkt ` +
+      `hinausgeht, ist normal — die Kilometrierungslinie beginnt oft später als die Achse. ` +
+      `Zur Probe wurde mit demselben Verfahren die bekannte Strecke zum Nachbarstein gelaufen und ` +
+      `dieser auf ${nfM.format(p.probe)} m getroffen. An ${EXTRA_ERR.faelle} übersprungenen ` +
+      `Außensteinen nachgemessen lag das Ergebnis typisch ${nfM.format(EXTRA_ERR.typical)} m neben ` +
+      `dem wahren Ort, im ungünstigen Zehntel ${nfM.format(EXTRA_ERR.worst)} m — der nächstgelegene ` +
+      `Stein lag dagegen ${nfM.format(EXTRA_ERR.stein)} m daneben.`;
+    if (p.hinaus > 1500) {
+      warn = `<p class="bb-note">${nfM.format(p.hinaus)} m über den letzten Stein hinausgerechnet. ` +
+        `Je weiter hinaus, desto unsicherer.</p>`;
     }
   } else if (p.quality === 'naechster') {
     warn = `<p class="bb-note">Bei km ${fmtKm(view.km)} ist kein Stein erfasst. Angezeigt wird der nächstgelegene bei km ${fmtKm(p.nearKm)} — ${fmtKm(Math.abs(p.delta))} km Unterschied.</p>`;
@@ -3487,8 +3658,9 @@ async function search() {
     if (!isFinite(km)) { toast('Kilometer nicht lesbar — z. B. 12,5 oder 14+250.'); return; }
 
     view.ref = ref;
-    const res = await resolvePoint(ref, km);
+    const res = await gleisGenau(ref, km, await resolvePoint(ref, km));
     applyPoint(ref, km, res);
+    if (res.pfad) { const { pfad, ...rest } = res; view.point = rest; zeichneGleisweg(pfad); }
     map.setView([res.lat, res.lon], Math.max(map.getZoom(), 15));
   } catch (err) {
     showError(err.message || 'Abfrage fehlgeschlagen.');

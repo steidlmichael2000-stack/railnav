@@ -139,9 +139,50 @@ Am Beispiel Strecke 5321 km 99,0 (Steine bei km 96,42 und 100,0, 3,1 km Luftlini
 Das Verhältnis von Gleisweg zu Kilometerdifferenz dient gleich als Prüfung: Passt es nicht auf
 ±20–30 %, wurde das falsche Gleis erwischt und die App lehnt das Ergebnis ab, statt es zu zeigen.
 
-Bewusst **kein Automatismus**: Die Abfrage dauert Sekunden, ist ratenbegrenzt, funktioniert nicht
-offline, und bei den üblichen 200 m Steinabstand wäre der Gewinn kleiner als die
-Erfassungsgenauigkeit der Steine selbst.
+**Seit die Kacheln beiliegen, passiert das von selbst.** Die Begründung gegen einen Automatismus
+lautete: Die Abfrage dauert Sekunden, ist ratenbegrenzt und funktioniert nicht offline. Aus der
+Kachel dauert sie 34 ms — dann gibt es keinen Grund, erst eine Schätzung hinzulegen, die der
+Nutzer wegdrücken muss. Gemessen an denselben Stellen:
+
+| | Verschiebung auf das Gleis | Dauer |
+| --- | --- | --- |
+| 5321 km 99,0 | 377 m | 238 ms |
+| 5741 km 5,6 | 158 m | 94 ms |
+| 5741 km 11,388 | 142 m | 65 ms |
+| 5251 km 3,2 | 29 m | 58 ms |
+
+Der Knopf bleibt für alles, was über Overpass geht — also außerhalb des erzeugten Gebiets.
+
+### Jenseits des äußersten Steins
+
+Für einen Kilometer vor dem ersten oder hinter dem letzten Stein fehlt das einschließende Paar.
+Bisher zeigte die App dort den nächstgelegenen Stein mit „1,0 km daneben" — gemeldet an Strecke
+5251 km 0,5, wo der erste erfasste Stein bei km 1,5 steht.
+
+Jetzt wird vom äußersten Stein aus am Gleis entlang hinausgelaufen. Dass die Trasse dabei über den
+Nullpunkt hinausgeht, ist kein Widerspruch: Die Kilometrierungslinie beginnt oft später als die
+Achse.
+
+**Gelaufen wird geradeaus, nicht kürzest.** Dijkstra sucht sich an einer Verzweigung irgendeinen
+Ast und landet auf dem Nachbargleis; eine Strecke folgt aber dem geraden Durchgang — an einer
+Weiche biegt das durchgehende Hauptgleis nicht ab. An 148 übersprungenen Außensteinen gemessen
+macht das den Unterschied zwischen 84 m und 38 m im Median.
+
+**Und der Lauf prüft sich selbst.** Mit demselben Verfahren wird die *bekannte* Strecke zum
+Nachbarstein gelaufen; trifft es dort nicht auf 100 m, wird nicht extrapoliert. Das fängt genau die
+Ausreißer ab:
+
+| | Fälle | Median | 90. Perzentil | schlechtester |
+| --- | --- | --- | --- | --- |
+| ohne Selbstprobe | 148 | 38 m | 249 m | **4333 m** |
+| mit Selbstprobe | 127 | **35 m** | **93 m** | **746 m** |
+| nächstgelegener Stein (bisher) | 148 | 264 m | 881 m | 2762 m |
+
+Besser als der nächstgelegene Stein in 119 von 127 Fällen. Wo die Probe scheitert oder mehr als
+3 km hinausgerechnet werden müssten, bleibt es bei der alten, ehrlichen Warnung.
+
+Bei Strecke 5251 km 0,5 heißt das: 1000 m vom Stein bei km 1,5 hinaus, Selbstprobe trifft den
+Nachbarstein auf 2 m, Ergebnis in 131 ms.
 
 ### Interpolieren oder einfach den nächsten Stein zeigen?
 
