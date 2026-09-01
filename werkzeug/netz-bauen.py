@@ -62,6 +62,13 @@ SPIEGEL = [
 ]
 ZEITGRENZE = 90        # Sekunden je Abruf; laenger heisst nur laenger warten
 
+# Womit sich das Skript bei Overpass meldet. Sich zu erkennen zu geben gehoert
+# zum guten Ton -- anonym abzusaugen waere schlechter Stil. Der Name des
+# Werkzeugs reicht dafuer; eine Adresse mit Kontoname stand hier vorher und
+# hat den Betreiber nichts angegangen. Wer eine Kontaktmoeglichkeit angeben
+# will, traegt sie hier ein.
+KENNUNG = 'railnav-netz-bauen/1.0'
+
 # Zwei Durchgaenge, und zwar getrennt, damit eine Aenderung am zweiten nicht
 # den ganzen ersten neu holen muss.
 #
@@ -115,7 +122,7 @@ def hole(q, warten, runden=2):
             try:
                 daten = urllib.parse.urlencode({'data': q}).encode()
                 rq = urllib.request.Request(ep, daten, headers={
-                    'User-Agent': 'railnav-netz-bauen/1.0 (github.com/steidlmichael2000-stack/railnav)',
+                    'User-Agent': KENNUNG,
                     'Accept': 'application/json'})
                 with urllib.request.urlopen(rq, timeout=ZEITGRENZE) as r:
                     return json.load(r)
