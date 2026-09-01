@@ -32,7 +32,12 @@ import urllib.request
 
 RASTER = 0.5                 # Kantenlaenge einer ausgelieferten Kachel in Grad
 VEREINFACHUNG = 5.0          # Douglas-Peucker in Metern
-DEUTSCHLAND = (47.2, 5.8, 55.1, 15.1)
+# Auf das Kachelraster ausgerichtet, nicht auf die Landesgrenze. Beim ersten
+# Lauf stand hier der knappe Umriss (47,2 / 5,8 / 55,1 / 15,1) -- damit fielen
+# 52 Kacheln durch, weil der Ausschnitt sie mittendrin abschnitt und eine nur
+# halb abgefragte Kachel bewusst aussen vor bleibt. Betroffen war unter anderem
+# der Zipfel bei Aachen. Ganze Kacheln kosten rund hundert Abfragen mehr.
+DEUTSCHLAND = (47.0, 5.5, 55.5, 15.5)
 
 # Abgefragt wird feiner als ausgeliefert. Eine 0,5-Grad-Zelle sind rund
 # 55 x 55 km; um Muenchen herum hat Overpass die dafuer noetige Antwort
@@ -41,25 +46,44 @@ DEUTSCHLAND = (47.2, 5.8, 55.1, 15.1)
 # billiger als eine, die immer wieder scheitert.
 ABFRAGE = 0.25
 
-# Reihenfolge nach gemessener Antwortzeit fuer eine 0,25-Grad-Zelle bei
-# Muenchen: fr 1,8 s, de 3,7 s. kumi und private.coffee lagen an diesem Tag
-# ganz am Boden -- sie bleiben als Reserve stehen, aber nicht mehr vorne.
+# overpass.openstreetmap.fr war anfangs die schnellste Instanz (1,8 s gegen
+# 3,7 s bei der Hauptinstanz fuer eine 0,25-Grad-Zelle bei Muenchen) und steht
+# trotzdem nicht mehr in der Liste: Nach rund 1600 Abfragen antwortete sie mit
+# 403. Das ist ihr gutes Recht, und der Erzeuger soll dort nicht weiter
+# anklopfen -- ein ganzes Landesnetz ist fuer eine freie Instanz eine Zumutung,
+# wenn man es an einem Stueck holt.
+#
+# Wer das Skript laufen laesst, sollte es deshalb ueber mehrere Tage strecken
+# oder --warten hochsetzen. Der Zwischenspeicher macht das Abbrechen billig.
 SPIEGEL = [
-    'https://overpass.openstreetmap.fr/api/interpreter',
     'https://overpass-api.de/api/interpreter',
     'https://overpass.kumi.systems/api/interpreter',
     'https://overpass.private.coffee/api/interpreter',
 ]
 ZEITGRENZE = 90        # Sekunden je Abruf; laenger heisst nur laenger warten
 
-# Gleise ohne service-Tag: Das laesst Anschluss-, Abstell- und Rangiergleise
-# weg und behaelt die durchgehenden Haupt- und Bahnhofsgleise. Gemessen an
-# einem dichten Ausschnitt im Ruhrgebiet sind das 334 km statt 291 km wie bei
-# einer reinen ref-Auswahl -- die zusaetzlichen 238 Wege ohne Nummer sind
+# Zwei Durchgaenge, und zwar getrennt, damit eine Aenderung am zweiten nicht
+# den ganzen ersten neu holen muss.
+#
+# Durchgang "haupt": Gleise ohne service-Tag, also ohne Anschluss-, Abstell-
+# und Rangiergleise, dazu alle Bahnknoten mit einer Kilometerangabe. Gemessen
+# an einem dichten Ausschnitt im Ruhrgebiet sind das 334 km statt 291 km wie
+# bei einer reinen ref-Auswahl -- die zusaetzlichen 238 Wege ohne Nummer sind
 # genau die, die den Graphen an Bahnhoefen zusammenhalten.
-WEGE = 'way(%s)[railway~"^(rail|light_rail|narrow_gauge)$"][!service];'
-KNOTEN = ('node(%s)[railway]["railway:position"];'
-          'node(%s)[railway]["railway:position:exact"];')
+#
+# Durchgang "nummer": Was trotz service-Tag eine Streckennummer traegt. Ohne
+# ihn fehlte bei 51,467606 / 7,059896 die Strecke 2505 ("ehem. Rheinische
+# Bahn", service=spur) -- Overpass bot sie mit 22 m Abstand an, die Kachel
+# kannte nur die 2163 mit 26 m. Eine Nummer ist eine Nummer, auch auf einem
+# Anschlussgleis, und die ORM-API kennt deren Kilometrierung.
+ABFRAGEN = [
+    ('haupt',
+     'way(%(b)s)[railway~"^(rail|light_rail|narrow_gauge)$"][!service];'
+     'node(%(b)s)[railway]["railway:position"];'
+     'node(%(b)s)[railway]["railway:position:exact"];'),
+    ('nummer',
+     'way(%(b)s)[railway~"^(rail|light_rail|narrow_gauge)$"][service][ref];'),
+]
 
 
 def hav(a, b, c, d):
@@ -72,10 +96,9 @@ def hav(a, b, c, d):
 
 # ---------------------------------------------------------------- Abruf
 
-def abfrage(sued, west, nord, ost):
+def abfrage(rumpf, sued, west, nord, ost):
     bbox = '%s,%s,%s,%s' % (sued, west, nord, ost)
-    return ('[out:json][timeout:180];(' + WEGE % bbox +
-            KNOTEN % (bbox, bbox) + ');out geom;')
+    return '[out:json][timeout:180];(' + rumpf % {'b': bbox} + ');out geom;'
 
 
 def hole(q, warten, runden=2):
@@ -104,20 +127,23 @@ def hole(q, warten, runden=2):
     raise RuntimeError('kein Overpass-Server hat geantwortet (%s)' % letzter)
 
 
-def speichername(speicher, sued, west, weite):
-    return os.path.join(speicher, 'z_%+08.3f_%+08.3f_%.3f.json' % (sued, west, weite))
+def speichername(speicher, marke, sued, west, weite):
+    # Die Marke steht im Namen, damit ein geaenderter Durchgang nicht stillschweigend
+    # alte Antworten weiterbenutzt -- genau das ist beim zweiten Durchgang aufgefallen.
+    vorn = 'z' if marke == 'haupt' else marke
+    return os.path.join(speicher, '%s_%+08.3f_%+08.3f_%.3f.json' % (vorn, sued, west, weite))
 
 
-def zelle_holen(speicher, sued, west, tiefe, warten, weite=ABFRAGE):
+def zelle_holen(speicher, marke, rumpf, sued, west, tiefe, warten, weite=ABFRAGE):
     """Eine Zelle abrufen; erst wenn auch Abwarten nichts hilft, vierteln."""
-    name = speichername(speicher, sued, west, weite)
+    name = speichername(speicher, marke, sued, west, weite)
     if os.path.exists(name):
         with open(name, encoding='utf-8') as f:
             return json.load(f)
 
     nord, ost = sued + weite, west + weite
     try:
-        d = hole(abfrage(sued, west, nord, ost), warten)
+        d = hole(abfrage(rumpf, sued, west, nord, ost), warten)
     except RuntimeError:
         if tiefe <= 0:
             raise
@@ -125,7 +151,8 @@ def zelle_holen(speicher, sued, west, tiefe, warten, weite=ABFRAGE):
         teile = []
         for ds in (0, h):
             for dw in (0, h):
-                teile.append(zelle_holen(speicher, sued + ds, west + dw, tiefe - 1, warten, h))
+                teile.append(zelle_holen(speicher, marke, rumpf, sued + ds, west + dw,
+                                         tiefe - 1, warten, h))
         d = {'elements': [e for t in teile for e in t.get('elements', [])]}
 
     with open(name, 'w', encoding='utf-8') as f:
@@ -373,33 +400,40 @@ def main():
         s += ABFRAGE
     teile_je_kachel = int(round((RASTER / ABFRAGE) ** 2))
 
-    print('%d Abfragezellen a %s Grad fuer %s (%d je Kachel)'
-          % (len(zellen), ABFRAGE, a.gebiet, teile_je_kachel))
+    print('%d Abfragezellen a %s Grad fuer %s (%d je Kachel), %d Durchgaenge'
+          % (len(zellen), ABFRAGE, a.gebiet, teile_je_kachel, len(ABFRAGEN)))
 
     wege, punkte = {}, {}
     fertig, fehlend = {}, []
     t_start = time.time()
-    for i, (s, w) in enumerate(zellen, 1):
-        kachel = '%d_%d' % (int(math.floor(s / RASTER)), int(math.floor(w / RASTER)))
-        vorhanden = os.path.exists(speichername(a.speicher, s, w, ABFRAGE))
-        if a.nur_bauen and not vorhanden:
-            fehlend.append('%.2f,%.2f' % (s, w))
-            continue
-        try:
+    for marke, rumpf in ABFRAGEN:
+        print('\n--- Durchgang "%s" ---' % marke, flush=True)
+        for i, (s, w) in enumerate(zellen, 1):
+            kachel = '%d_%d' % (int(math.floor(s / RASTER)), int(math.floor(w / RASTER)))
+            vorhanden = os.path.exists(speichername(a.speicher, marke, s, w, ABFRAGE))
+            if a.nur_bauen and not vorhanden:
+                fehlend.append('%s %.2f,%.2f' % (marke, s, w))
+                continue
+            try:
+                if not vorhanden:
+                    time.sleep(a.warten)
+                d = zelle_holen(a.speicher, marke, rumpf, s, w, 1, a.warten)
+            except Exception as e:
+                print('[%s %d/%d] %.2f,%.2f: FEHLT (%s)'
+                      % (marke, i, len(zellen), s, w, e), flush=True)
+                fehlend.append('%s %.2f,%.2f' % (marke, s, w))
+                continue
+            auswerten(d, wege, punkte)
+            d = None
+            # Nur der erste Durchgang zaehlt fuer die Deckung: Er bringt die
+            # durchgehenden Gleise, der zweite liefert nur Nachtraege.
+            if marke == ABFRAGEN[0][0]:
+                fertig[kachel] = fertig.get(kachel, 0) + 1
             if not vorhanden:
-                time.sleep(a.warten)
-            d = zelle_holen(a.speicher, s, w, 1, a.warten)
-        except Exception as e:
-            print('[%d/%d] %.2f,%.2f: FEHLT (%s)' % (i, len(zellen), s, w, e), flush=True)
-            fehlend.append('%.2f,%.2f' % (s, w))
-            continue
-        auswerten(d, wege, punkte)
-        d = None
-        fertig[kachel] = fertig.get(kachel, 0) + 1
-        if not vorhanden:
-            dauer = time.time() - t_start
-            print('[%d/%d] %.2f,%.2f: %d Wege, %d Kilometerpunkte, %.0f min gelaufen'
-                  % (i, len(zellen), s, w, len(wege), len(punkte), dauer / 60), flush=True)
+                dauer = time.time() - t_start
+                print('[%s %d/%d] %.2f,%.2f: %d Wege, %d Kilometerpunkte, %.0f min gelaufen'
+                      % (marke, i, len(zellen), s, w, len(wege), len(punkte), dauer / 60),
+                      flush=True)
 
     erzeugte = sorted(k for k, n in fertig.items() if n >= teile_je_kachel)
     unvollstaendig = sorted(k for k, n in fertig.items() if n < teile_je_kachel)

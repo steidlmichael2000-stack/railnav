@@ -471,9 +471,9 @@ Gerechnet mit echten Daten:
 | --- | --- | --- |
 | alle 10 m | 3,3 Mio. | rund 12 MB (hochgerechnet) |
 | alle 100 m | 330.000 | rund 1,2 MB (hochgerechnet) |
-| OSM-Stützpunkte, auf 5 m vereinfacht | **632.035** | **3,46 MB** (gebaut, nicht geschätzt) |
+| OSM-Stützpunkte, auf 5 m vereinfacht | **652.527** | **3,54 MB** (gebaut, nicht geschätzt) |
 
-Der gebaute Satz deckt dabei mehr ab als die Hochrechnungen: 89.355 km Gleis über Deutschland und
+Der gebaute Satz deckt dabei mehr ab als die Hochrechnungen: 90.900 km Gleis über Deutschland und
 die Grenzgebiete, nicht nur 33.000 km deutsches Streckennetz.
 
 ### Was in den Kacheln steht
@@ -525,9 +525,9 @@ Geholt wird immer nur, worauf man steht. Am Server gemessen:
 | --- | --- | --- |
 | `index.json` | 3,9 kB | 852 B |
 | `t_95_25` (Berchtesgaden) | 24,7 kB | 10,0 kB |
-| `t_102_13` (Ruhrgebiet, die größte) | 212 kB | 84 kB |
+| `t_102_13` (Ruhrgebiet, die größte) | 216 kB | 85 kB |
 
-Median über alle Kacheln: 20 kB roh.
+Median über alle Kacheln: 21 kB roh.
 
 **Fehlt auch nur eine berührte Kachel, geht die Anfrage vollständig über Overpass.** Halb aus
 Kacheln und halb aus dem Netz zu antworten hieße, stillschweigend Gleise zu verlieren. Overpass
