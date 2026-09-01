@@ -305,6 +305,43 @@ Testfälle (Strecke 5321, km 9,9–13,7) fand Dijkstra einen 5958 m langen Weg f
 Kilometerdifferenz — über ein Nachbargleis. Das Ergebnis wäre 579 m danebengelegen; das Verhältnis
 1,57 liegt außerhalb von 0,8–1,3, und die App lehnt es ab, statt es zu zeigen.
 
+### Drei Fehler, die erst die Kacheln sichtbar gemacht haben
+
+Gemeldet an 49,520913 / 10,274394: *„Der Punkt liegt 4.120 m von der Verbindungslinie der Steine
+bei km 96,2 und 96,21 entfernt."* Der Punkt liegt in Wahrheit **15 m** vom Gleis der Strecke 5321,
+aber in einer Steinlücke von 9 km. Drei Ursachen auf einmal:
+
+**1. Punkte wurden an Stützpunkte gehängt, nicht ans Gleis.** Die Wegsuche hakt Anfang und Ende
+am nächsten Knoten des Gleisnetzes ein und bricht über 80 m Abstand ab. Das ging, solange die
+Geometrie von Overpass kam. In den Kacheln lässt die Vereinfachung auf 5 m auf Geraden aber
+Stützpunkte weg: 23 % der Kanten sind länger als 160 m, die längste 1579 m. Die beiden Steine bei
+km 87,2 und 96,2 stehen 0 m und 2 m neben der Linie — und waren 204 m und 271 m vom nächsten
+Stützpunkt entfernt.
+
+An 1802 Fällen nachgemessen: Anhängen am Knoten ergibt im Median 56 m Abstand und **überschreitet
+die 80-m-Grenze in 42 % der Fälle**; Anhängen an der Kante ergibt 1 m und in **0 %**. Die
+Wegsuche ist also seit den Kacheln in fast jedem zweiten Fall still gescheitert. Jetzt wird auf
+die Kante projiziert und dort ein Knoten eingefügt.
+
+**2. Der Suchradius für den Startwert war 38 m zu klein.** Der nächste Kilometerpunkt lag 4038 m
+entfernt, der Radius bei 4000 m. Die Suche fiel auf einen Notbehelf zurück, der die falsche Seite
+erwischte. Der Radius steht jetzt bei 12 km — unbedenklich, weil sich die Punkte aus den Kacheln
+der Strecke zuordnen lassen, auf deren Gleis sie stehen. Und statt nur des nächsten werden bis zu
+vier deutlich verschiedene Startwerte angeboten und der Reihe nach geladen, bis der Punkt
+zwischen zwei Steinen liegt: Der nächste war km 96,2, gebraucht wurde zusätzlich km 87,2 auf der
+anderen Seite.
+
+**3. Der Rand um die Sehne war zu knapp.** Feste 1,3 km reichen bei kurzen Abständen; über 9 km
+läuft das Gleis aus dem Ausschnitt heraus. Der Rand wächst jetzt mit dem Steinabstand.
+
+Dazu wurde die Grenze für die Rechnung entlang des Gleises von 8 auf 25 km angehoben. Die 8 km
+galten der *geradlinigen* Interpolation. Am Gleis entlang trägt es weiter — an 1802 Fällen
+gemessen liegt der Fehler bei 8–15 km Steinabstand im Median bei 16 m und im ungünstigen Zehntel
+bei 52 m, bei 15–25 km bei 19 und 42 m, also nicht schlechter als bei 3–8 km (25 und 106 m).
+
+Der gemeldete Punkt löst sich damit in 247 ms auf: Strecke 5321, **km 91,537**, entlang von
+9031 m Gleisweg zwischen km 87,2 und 96,2 — laut Kilometrierung 9000 m.
+
 ### Woran die Suche vorher scheiterte
 
 Gemeldet mit einer Koordinate bei Bischofswiesen (47,667669 / 12,944516), 51 m vom Gleis der

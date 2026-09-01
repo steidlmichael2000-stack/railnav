@@ -42,6 +42,21 @@ const MAX_GAP_KM = 8;
  * Eine Gerade über viele Kilometer unbekannten Verlaufs sieht auf der Karte
  * falsch aus und würde Klicks weit neben dem echten Gleis an sich ziehen. */
 const MAX_DRAW_GAP_KM = 3;
+
+/* Und für die Rechnung entlang des echten Gleises noch einmal weiter.
+ *
+ * MAX_GAP_KM begrenzt die geradlinige Interpolation, weil dort jenseits von
+ * 8 km die Datenlage zu dünn war, um sie zu belegen. Am Gleisverlauf entlang
+ * gilt das nicht: An 1802 übersprungenen Zwischensteinen nachgemessen liegt
+ * der Fehler bei 8–15 km Steinabstand im Median bei 16 m und im ungünstigen
+ * Zehntel bei 52 m, bei 15–25 km bei 19 und 42 m — also nicht schlechter als
+ * bei 3–8 km (25 und 106 m). Die Prüfung Gleisweg gegen Kilometerdifferenz
+ * fängt die Fehlpaare ohnehin ab.
+ *
+ * Gemeldet an Strecke 5321 bei 49,520913 / 10,274394: Der Punkt liegt 15 m
+ * vom Gleis, aber in einer Steinlücke von 9 km zwischen km 87,2 und 96,2 —
+ * mit der alten Grenze wurde dieses Paar gar nicht erst gebildet. */
+const MAX_GLEIS_GAP_KM = 25;
 const CLICK_TOL_PX = 34;     // Klicktoleranz quer zur Strecke
 /* Ab wie viel abgeschnittenem Weg lohnt es, den Kilometer entlang des Gleises
  * statt über die Sehne zu lesen? Gemessen an 553 Zwischensteinen — siehe
@@ -54,9 +69,15 @@ const UMWEG_GRENZE = 200;
 const PUNKT_TOL = 80;
 /* Wie weit wird nach einer Kilometerangabe gesucht, die der ORM-Abfrage als
  * Startwert dient? Der Wert muss nur grob stimmen — die API liefert danach die
- * Steine ringsum. Weiter als 4 km hinauszuschauen brächte eher Angaben einer
- * fremden Strecke ins Spiel. */
-const SEED_RADIUS = 4000;
+ * Steine ringsum.
+ *
+ * Anfangs standen hier 4 km, mit der Begründung, weiter hinauszuschauen bringe
+ * Angaben fremder Strecken ins Spiel. Gemeldet an Strecke 5321 bei 49,520913 /
+ * 10,274394 lag der nächste Kilometerpunkt aber 4038 m entfernt — 38 m zu weit,
+ * und die Suche fiel auf einen Notbehelf zurück, der die falsche Seite erwischte.
+ * Aus den Kacheln lassen sich die Punkte ohnehin der Strecke zuordnen, auf der
+ * sie stehen; damit ist der weite Radius unbedenklich. */
+const SEED_RADIUS = 12000;
 const STORE_KEY = 'railnav.v3';
 
 /* Mehrere Instanzen, weil einzelne zeitweise ausfallen: Die Hauptinstanz war
@@ -646,8 +667,7 @@ async function netzBereich(sued, west, nord, ost) {
  */
 const REFINE_MIN_CHORD = 700;
 
-async function railGeometry(a, b) {
-  const pad = 0.012;   // gut 1 km Rand, damit Bögen außerhalb der Sehne mitkommen
+async function railGeometry(a, b, pad = 0.012) {
   const bbox = [
     Math.min(a.lat, b.lat) - pad, Math.min(a.lon, b.lon) - pad,
     Math.max(a.lat, b.lat) + pad, Math.max(a.lon, b.lon) + pad
@@ -693,13 +713,59 @@ function buildGraph(ways) {
   return nodes;
 }
 
-function nearestNode(nodes, lat, lon) {
-  let key = null, dist = Infinity;
-  for (const [k, n] of nodes) {
-    const d = haversine(lat, lon, n.lat, n.lon);
-    if (d < dist) { dist = d; key = k; }
+/* Einen Punkt in das Knotennetz einhängen — auch mitten auf einer Kante.
+ *
+ * Der nächste Stützpunkt allein genügt seit den mitgelieferten Kacheln nicht
+ * mehr: Die Vereinfachung auf 5 m lässt auf Geraden Punkte weg. Gemessen sind
+ * 23 % der Kanten länger als 160 m, die längste 1579 m. Ein Stein, der exakt
+ * auf dem Gleis steht, lag damit plötzlich 271 m vom nächsten Stützpunkt
+ * entfernt, und die Wegsuche brach mit „die Steine liegen zu weit vom Gleis"
+ * ab — gemeldet an Strecke 5321 zwischen km 87,2 und 96,2, wo die Steine in
+ * Wahrheit 0 m und 2 m neben der Linie stehen.
+ *
+ * Deshalb wird auf die Kante projiziert und, wenn der Fuß mittendrin liegt,
+ * ein Knoten eingefügt. Die ursprüngliche Kante bleibt daneben stehen; sie ist
+ * genauso lang wie der Umweg über den neuen Knoten und stört deshalb nicht. */
+function einhaengen(nodes, lat, lon) {
+  const ky = 110540, kx = Math.cos(lat * Math.PI / 180) * 111320;
+  const px = lon * kx, py = lat * ky;
+  let best = null;
+
+  for (const n1 of nodes.values()) {
+    const ax = n1.lon * kx, ay = n1.lat * ky;
+    for (const [k2] of n1.adj) {
+      const n2 = nodes.get(k2);
+      const dx = n2.lon * kx - ax, dy = n2.lat * ky - ay;
+      const len2 = dx * dx + dy * dy;
+      let t = len2 > 0 ? ((px - ax) * dx + (py - ay) * dy) / len2 : 0;
+      t = Math.max(0, Math.min(1, t));
+      const cx = ax + t * dx, cy = ay + t * dy;
+      const dist = Math.hypot(px - cx, py - cy);
+      if (!best || dist < best.dist) {
+        best = { dist, t, von: n1, nach: k2, lat: cy / ky, lon: cx / kx };
+      }
+    }
   }
-  return { key, dist };
+  if (!best) return { key: null, dist: Infinity };
+
+  // Endpunkt genau getroffen? Dann keinen zusätzlichen Knoten anlegen.
+  const schluessel = n => n.lat.toFixed(7) + ',' + n.lon.toFixed(7);
+  if (best.t <= 1e-9) return { key: schluessel(best.von), dist: best.dist };
+  if (best.t >= 1 - 1e-9) return { key: best.nach, dist: best.dist };
+
+  const key = best.lat.toFixed(7) + ',' + best.lon.toFixed(7);
+  if (!nodes.has(key)) {
+    const neu = { lat: best.lat, lon: best.lon, adj: [] };
+    nodes.set(key, neu);
+    for (const k of [schluessel(best.von), best.nach]) {
+      const n = nodes.get(k);
+      if (!n) continue;
+      const d = haversine(neu.lat, neu.lon, n.lat, n.lon);
+      neu.adj.push([k, d]);
+      n.adj.push([key, d]);
+    }
+  }
+  return { key, dist: best.dist };
 }
 
 /** Kleinster Eintrag zuerst — ein Binärhaufen, damit Dijkstra nicht jedes Mal
@@ -839,7 +905,12 @@ function zeichneGleisweg(path) {
  * Die Kacheln lassen Anschluss- und Rangiergleise weg, und an einer Stelle,
  * wo der Verlauf ausgerechnet darüber führt, käme sonst gar nichts heraus. */
 async function gleisWegZwischen(A, B, nurLokal = false) {
-  const pad = 0.012;
+  /* Rand um die Sehne, damit Bögen mitkommen, die daneben ausschlagen. Fest
+   * 0,012° (gut 1,3 km) reichten nur bei kurzen Abständen: Zwischen den Steinen
+   * bei km 87,2 und 96,2 der Strecke 5321 lief das Gleis aus dem Ausschnitt
+   * heraus, der Weg wurde nicht gefunden und die Suche fiel auf Overpass zurück.
+   * Mit dem Abstand wachsen lassen, aber gedeckelt. */
+  const pad = Math.min(0.06, 0.012 + Math.abs(B.km - A.km) * 0.002);
   const lokal = await netzBereich(
     Math.min(A.lat, B.lat) - pad, Math.min(A.lon, B.lon) - pad,
     Math.max(A.lat, B.lat) + pad, Math.max(A.lon, B.lon) + pad);
@@ -850,7 +921,7 @@ async function gleisWegZwischen(A, B, nurLokal = false) {
   // nurLokal: für Rechnungen, die sich nur lohnen, solange sie nichts kosten
   if (nurLokal) return null;
 
-  const ways = await railGeometry(A, B);
+  const ways = await railGeometry(A, B, pad);
   if (!ways.length) throw new Error('keine Gleisgeometrie im Ausschnitt');
   return wegAusWegen(ways, A, B);
 }
@@ -860,8 +931,8 @@ function wegAusWegen(ways, A, B) {
   const nodes = buildGraph(ways);
   if (nodes.size > 60000) throw new Error('zu viele Gleise im Ausschnitt');
 
-  const na = nearestNode(nodes, A.lat, A.lon);
-  const nb = nearestNode(nodes, B.lat, B.lon);
+  const na = einhaengen(nodes, A.lat, A.lon);
+  const nb = einhaengen(nodes, B.lat, B.lon);
   if (na.dist > 80 || nb.dist > 80) {
     throw new Error(`die Steine liegen bis ${nfM.format(Math.max(na.dist, nb.dist))} m vom nächsten Gleis entfernt`);
   }
@@ -894,7 +965,7 @@ async function kmEntlangGleis(ref, lat, lon, nurLokal = false) {
   const e = lineCache.get(ref);
   if (!e || e.sorted.length < 2) return null;
 
-  const grob = projectOnLine(e.sorted, lat, lon, MAX_GAP_KM);
+  const grob = projectOnLine(e.sorted, lat, lon, MAX_GLEIS_GAP_KM);
   if (!grob) return null;
 
   const weg = await gleisWegZwischen(grob.a, grob.b, nurLokal);
@@ -2891,6 +2962,8 @@ async function netzLinesNear(lat, lon) {
   const bereich = await netzBereich(lat - dLat, lon - dLon, lat + dLat, lon + dLon);
   if (!bereich) return null;
 
+  const gehoertZu = (w, ref) => w.ref && String(w.ref).split(';').some(t => t.trim() === ref);
+
   const byRef = new Map();
   for (const w of bereich.wege) {
     if (!w.ref) continue;
@@ -2903,17 +2976,38 @@ async function netzLinesNear(lat, lon) {
     }
   }
 
-  let seed = null;
-  for (const p of bereich.punkte) {
-    const d = haversine(lat, lon, p.lat, p.lon);
-    if (d <= SEED_RADIUS && (!seed || d < seed.dist)) seed = { km: p.km, dist: d };
-  }
-
   return {
-    refs: [...byRef.entries()].sort((a, b) => a[1] - b[1]).slice(0, 4)
-      .map(([ref, dist]) => ({ ref, dist })),
-    seed
+    refs: [...byRef.entries()].sort((a, b) => a[1] - b[1]).slice(0, 4).map(([ref, dist]) => {
+      /* Kilometerpunkte tragen in der Kachel keine Streckennummer. Zugeordnet
+       * werden sie über die Lage: Was auf dem Gleis dieser Strecke steht,
+       * gehört zu ihr. Ohne diese Prüfung würde ein weiter Suchradius die
+       * Punkte der Nachbarstrecke einsammeln. */
+      const gleise = bereich.wege.filter(w => gehoertZu(w, ref));
+      const eigene = bereich.punkte.filter(p => gleise.some(w => distToWay(p.lat, p.lon, w.geometry) < 25));
+      return { ref, dist, seeds: startwerte(eigene.map(p => ({ km: p.km, dist: haversine(lat, lon, p.lat, p.lon) }))) };
+    })
   };
+}
+
+/* Mehrere Startwerte statt nur des nächsten.
+ *
+ * Die ORM-Abfrage liefert die Steine im Umkreis der angefragten Position. Liegt
+ * der nächste Kilometerpunkt weit weg, deckt eine einzige Abfrage womöglich nur
+ * eine Seite ab. Gemeldet an Strecke 5321 bei 49,520913 / 10,274394: Der nächste
+ * Punkt war km 96,2 in 4038 m, der übernächste km 87,2 in 4268 m — auf der
+ * anderen Seite. Mit dem Startwert 96,2 fehlte der Stein bei 87,2, und damit gab
+ * es kein Paar, das den Punkt einschließt.
+ *
+ * Deshalb nach Abstand sortiert bis zu vier deutlich verschiedene Kilometerwerte
+ * anbieten; useLineAt probiert sie der Reihe nach. */
+function startwerte(kandidaten) {
+  const raus = [];
+  for (const k of kandidaten.filter(k => k.dist <= SEED_RADIUS).sort((a, b) => a.dist - b.dist)) {
+    if (raus.some(v => Math.abs(v.km - k.km) < 5)) continue;   // dieselbe Gegend, bringt nichts
+    raus.push(k);
+    if (raus.length >= 4) break;
+  }
+  return raus;
 }
 
 async function linesNear(lat, lon) {
@@ -2963,7 +3057,7 @@ async function linesNear(lat, lon) {
     .slice(0, 4)
     .map(([ref, dist]) => ({ ref, dist }));
 
-  // Nächste Kilometerangabe als Startwert — die ORM-API braucht eine Position,
+  // Kilometerangaben als Startwerte — die ORM-API braucht eine Position,
   // um überhaupt etwas ausliefern zu können.
   const stones = els
     .filter(n => n.type === 'node' && n.tags)
@@ -2971,28 +3065,26 @@ async function linesNear(lat, lon) {
       const roh = n.tags['railway:position'] != null ? n.tags['railway:position'] : n.tags['railway:position:exact'];
       return { km: parseFloat(String(roh).replace(',', '.')), dist: haversine(lat, lon, n.lat, n.lon) };
     })
-    .filter(s => isFinite(s.km))
-    .sort((a, b) => a.dist - b.dist);
+    .filter(s => isFinite(s.km));
 
-  return { refs, seed: stones[0] || null };
+  return { refs, seeds: startwerte(stones) };
 }
 
 async function lookupByClick(lat, lon) {
   setBusy(true);
   showStatus('Suche, welche Strecke hier liegt …');
   try {
-    const { refs, seed } = await linesNear(lat, lon);
+    const { refs, seeds } = await linesNear(lat, lon);
     if (!refs.length) {
       showError('Hier ist keine nummerierte Strecke erfasst. Näher an ein Gleis tippen.');
       return;
     }
     /* Ohne Kilometerangabe in der Nähe geht es trotzdem weiter: den Startwert
      * holt sich useLineAt dann bei der Strecke selbst. */
-    const seedKm = seed ? seed.km : null;
     if (refs.length === 1) {
-      await useLineAt(refs[0].ref, seedKm, lat, lon);
+      await useLineAt(refs[0].ref, refs[0].seeds || seeds, lat, lon);
     } else {
-      showPicker(refs, seedKm, lat, lon);
+      showPicker(refs, seeds, lat, lon);
     }
   } catch (err) {
     /* Overpass liefert die Gleisgeometrie und ist der einzige Weg, an beliebiger
@@ -3030,24 +3122,33 @@ async function seedAusApi(ref, lat, lon) {
 }
 
 /** Strecke laden und den Klickpunkt darauf projizieren. */
-async function useLineAt(ref, seedKm, lat, lon) {
+async function useLineAt(ref, seeds, lat, lon) {
   setBusy(true);
   showStatus(`Lade Strecke ${ref} …`);
   try {
     view.ref = ref;
     $('#ref').value = ref;
 
-    if (seedKm == null) {
+    const liste = Array.isArray(seeds) ? seeds.slice() : (seeds == null ? [] : [{ km: seeds }]);
+    if (!liste.length) {
       showStatus(`Strecke ${ref}: keine Kilometerangabe in der Nähe — frage die Strecke ab …`);
-      seedKm = await seedAusApi(ref, lat, lon);
-      if (seedKm == null) {
+      const km = await seedAusApi(ref, lat, lon);
+      if (km == null) {
         showError(`Für Strecke ${ref} ist in OpenStreetMap kein einziger Kilometerpunkt erfasst — der Kilometer lässt sich nicht bestimmen.`);
         return;
       }
+      liste.push({ km });
     }
 
-    await coverage(ref, seedKm);
-    const e = lineCache.get(ref);
+    /* Der Reihe nach laden, bis der Punkt zwischen zwei Steinen liegt. Ein
+     * einzelner Startwert deckt womöglich nur eine Seite ab — siehe startwerte(). */
+    let e = null;
+    for (const s of liste) {
+      await coverage(ref, s.km);
+      e = lineCache.get(ref);
+      const p = projectOnLine(e.sorted, lat, lon, MAX_GLEIS_GAP_KM);
+      if (p && p.dist <= 400) break;
+    }
     drawMilestones();
 
     const hit = projectOnLine(e.sorted, lat, lon);
@@ -3061,7 +3162,7 @@ async function useLineAt(ref, seedKm, lat, lon) {
      * MAX_DRAW_GAP_KM auseinander und werden gar nicht erst verbunden, oder die
      * Sehne schneidet einen Bogen so weit ab, dass der Punkt scheinbar
      * hunderte Meter danebenliegt. Beides löst der echte Verlauf. */
-    const weit = projectOnLine(e.sorted, lat, lon, MAX_GAP_KM);
+    const weit = projectOnLine(e.sorted, lat, lon, MAX_GLEIS_GAP_KM);
     if (weit) {
       /* Ehrliche Wartezeit: Der Abruf lief gemessen zwischen 5 und 20 s, und wenn
        * Overpass überlastet ist, probiert die App der Reihe nach drei Instanzen
@@ -3107,7 +3208,7 @@ async function useLineAt(ref, seedKm, lat, lon) {
   }
 }
 
-function showPicker(refs, seedKm, lat, lon) {
+function showPicker(refs, seeds, lat, lon) {
   const b = $('#bottom');
   b.hidden = false;
   b.innerHTML = `<p class="bb-title">Mehrere Strecken an dieser Stelle</p>
@@ -3115,7 +3216,10 @@ function showPicker(refs, seedKm, lat, lon) {
     <div class="pick">${refs.map(r =>
       `<button type="button" data-pick="${esc(r.ref)}">${esc(r.ref)}<small>${nfM.format(r.dist)} m</small></button>`).join('')}</div>`;
   b.querySelectorAll('[data-pick]').forEach(btn =>
-    btn.addEventListener('click', () => useLineAt(btn.dataset.pick, seedKm, lat, lon)));
+    btn.addEventListener('click', () => {
+      const r = refs.find(x => x.ref === btn.dataset.pick);
+      useLineAt(btn.dataset.pick, (r && r.seeds) || seeds, lat, lon);
+    }));
   updateBH();
 }
 
