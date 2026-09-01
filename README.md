@@ -546,8 +546,18 @@ python werkzeug/netz-bauen.py
 
 Die rohen Overpass-Antworten landen in `.cache/overpass` und werden beim nächsten Lauf
 wiederverwendet — der Abruf darf also abbrechen und später weiterlaufen. `--nur-bauen` schreibt
-die Kacheln allein aus dem Zwischenspeicher, ohne eine einzige Netzabfrage. Danach `VERSION` in
-`sw.js` hochzählen, sonst bekommen Geräte mit altem Cache die neuen Kacheln nicht.
+die Kacheln allein aus dem Zwischenspeicher, ohne eine einzige Netzabfrage.
+
+**Danach `VERSION` in `sw.js` hochzählen.** Der Service Worker legt Kacheln „erst Cache" ab; ohne
+neue Versionsnummer behält ein Gerät die alten für immer. Beim Bau dieser Fassung ist genau das
+passiert — zwei Kachelstände unter derselben Version `v9` ausgeliefert —, und es fällt nicht auf,
+weil auf dem eigenen Rechner der Cache ohnehin leer ist. Ein Anlass ist eine Änderung an
+`netz/`, nicht nur eine am Programm.
+
+Ein ganzes Landesnetz ist für eine freie Overpass-Instanz eine Zumutung, wenn man es an einem
+Stück holt: `overpass.openstreetmap.fr` hat nach rund 1600 Abfragen mit 403 dichtgemacht. Den
+Abruf also über mehrere Tage strecken oder `--warten` hochsetzen — der Zwischenspeicher macht das
+Abbrechen billig. Der volle Lauf brauchte hier rund fünfeinhalb Stunden für 2720 Abfragen.
 
 Die Daten stammen aus OpenStreetMap und stehen unter der **ODbL**; das gilt auch für die erzeugten
 Kacheln. `netz/index.json` trägt Stand und Herkunft mit.
