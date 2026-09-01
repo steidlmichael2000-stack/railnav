@@ -571,6 +571,20 @@ body {
 .kml-km small { margin-top: 1px; color: var(--muted); font-weight: 400; }
 .kml-km:active { filter: brightness(1.15); }
 
+/* Von Hand gesetzter Punkt: bewusst anders als die Stecknadel des Ergebnisses,
+   damit man sieht, was noch Rohmaterial ist und was schon gerechnet wurde. */
+.merk-pin {
+  width: 18px; height: 18px; border-radius: 50%;
+  border: 3px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  box-shadow: 0 0 0 2px rgba(0, 0, 0, .35);
+}
+.kml-pop .merk-zweit { margin-left: 12px; }
+.kml-km.merk-weg {
+  margin-top: 6px; font-weight: 500;
+  border-color: var(--line); background: transparent; color: var(--muted);
+}
+
 .fine { font-size: .74rem; color: var(--muted); line-height: 1.6; margin: 0 0 8px; }
 .fine:last-child { margin-bottom: 0; }
 .fine strong { color: var(--text); }

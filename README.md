@@ -55,6 +55,12 @@ Die Anzeige unten lässt sich über das **×** wieder wegdrücken, und der Faden
 Karte schaltet das Ablesen durch Tippen ganz ab — dann wirft ein versehentlicher Tipp die Anzeige
 nicht mehr um. Kilometersteine bleiben antippbar, die trifft man nicht zufällig.
 
+**Lange drücken setzt einen Punkt** (am Rechner die rechte Maustaste). Es erscheint eine
+Sprechblase mit der Koordinate, dem Weg zu Google Maps und einem Knopf *Kilometer bestimmen* —
+genau wie bei einem Punkt aus einer KML-Datei. Das ist der bewusste Griff für alle, die den
+schnellen Tipp lieber abschalten: Erst setzt man den Punkt, dann entscheidet man, was damit
+geschehen soll.
+
 Der Knopf mit dem Lineal darüber schaltet das **Messen** ein. Solange es läuft, setzt jeder Tipp
 einen Messpunkt statt einen Kilometer abzulesen. **Kilometersteine und Objekte aus geladenen
 KML-Dateien werden dabei gefangen** — bei einem KML-Punkt auf seine genaue Koordinate, bei einer
@@ -183,6 +189,12 @@ Besser als der nächstgelegene Stein in 119 von 127 Fällen. Wo die Probe scheit
 
 Bei Strecke 5251 km 0,5 heißt das: 1000 m vom Stein bei km 1,5 hinaus, Selbstprobe trifft den
 Nachbarstein auf 2 m, Ergebnis in 131 ms.
+
+**Und in der Gegenrichtung genauso.** Wer jenseits des äußersten Steins auf die Karte tippt, bekam
+weiter „der Punkt liegt 1.015 m vom Gleis entfernt" — die App lotete ihn auf das letzte Steinpaar,
+statt hinauszulaufen. Jetzt wird bis 3 km hinaus gelaufen und der Tipp auf diesen Weg gelotet; die
+Weglänge bis zum Lot ist die Kilometerdifferenz. An der gemeldeten Stelle 49,447926 / 10,271642:
+Strecke 5251, **km 0,634**, 866 m hinaus, 6 m querab, Selbstprobe auf 2 m.
 
 ### Interpolieren oder einfach den nächsten Stein zeigen?
 

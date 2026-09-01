@@ -742,13 +742,19 @@ function buildGraph(ways) {
  * Deshalb wird auf die Kante projiziert und, wenn der Fuß mittendrin liegt,
  * ein Knoten eingefügt. Die ursprüngliche Kante bleibt daneben stehen; sie ist
  * genauso lang wie der Umweg über den neuen Knoten und stört deshalb nicht. */
-function naechsteKante(nodes, lat, lon, erlaubt) {
+/* Nächste Kante — je Zusammenhangskomponente in einem einzigen Durchgang.
+ *
+ * Zuerst stand hier eine Suche je Komponente, also O(Teile × Kanten). In einem
+ * weiten Ausschnitt mit vielen Teilstücken war das der Grund, warum ein weit
+ * abgesetzter Tipp wieder ewig lud. Eine Runde reicht: Zu jeder Kante ist die
+ * Komponente bekannt, das Beste wird je Nummer gemerkt. */
+function kantenJeTeil(nodes, teil, lat, lon) {
   const ky = 110540, kx = Math.cos(lat * Math.PI / 180) * 111320;
   const px = lon * kx, py = lat * ky;
-  let best = null;
+  const best = new Map();
 
   for (const [k1, n1] of nodes) {
-    if (erlaubt && !erlaubt(k1)) continue;
+    const nr = teil ? teil.get(k1) : 0;
     const ax = n1.lon * kx, ay = n1.lat * ky;
     for (const [k2] of n1.adj) {
       const n2 = nodes.get(k2);
@@ -758,12 +764,35 @@ function naechsteKante(nodes, lat, lon, erlaubt) {
       t = Math.max(0, Math.min(1, t));
       const cx = ax + t * dx, cy = ay + t * dy;
       const dist = Math.hypot(px - cx, py - cy);
-      if (!best || dist < best.dist) {
-        best = { dist, t, von: k1, nach: k2, lat: cy / ky, lon: cx / kx };
+      const alt = best.get(nr);
+      if (!alt || dist < alt.dist) {
+        best.set(nr, { dist, t, von: k1, nach: k2, lat: cy / ky, lon: cx / kx });
       }
     }
   }
   return best;
+}
+
+/** Beide Punkte in dieselbe Komponente einhängen; null, wenn keine beide trägt. */
+function paarEinhaengen(nodes, A, B, grenze = 80) {
+  const teil = komponenten(nodes);
+  const a = kantenJeTeil(nodes, teil, A.lat, A.lon);
+  const b = kantenJeTeil(nodes, teil, B.lat, B.lon);
+  let wahl = null;
+  for (const [nr, ka] of a) {
+    const kb = b.get(nr);
+    if (!kb) continue;
+    const schlechter = Math.max(ka.dist, kb.dist);
+    if (!wahl || schlechter < wahl.schlechter) wahl = { a: ka, b: kb, schlechter };
+  }
+  if (!wahl) return null;
+  wahl.na = einfuegen(nodes, wahl.a);
+  wahl.nb = einfuegen(nodes, wahl.b);
+  return wahl;
+}
+
+function naechsteKante(nodes, lat, lon) {
+  return kantenJeTeil(nodes, null, lat, lon).get(0) || null;
 }
 
 /** Die gefundene Stelle wirklich als Knoten einsetzen. */
@@ -785,10 +814,6 @@ function einfuegen(nodes, best) {
     }
   }
   return { key, dist: best.dist };
-}
-
-function einhaengen(nodes, lat, lon, erlaubt) {
-  return einfuegen(nodes, naechsteKante(nodes, lat, lon, erlaubt));
 }
 
 /** Zusammenhangskomponenten: Knotenschlüssel → Nummer. */
@@ -995,24 +1020,13 @@ function wegAusWegen(ways, A, B) {
    * durchgehende Gleis zwei Meter weiter liegt. Gemeldet an Strecke 5321
    * zwischen km 96,42 und 100,0: Beide Steine hingen sich auf 1 m ein, und
    * trotzdem gab es keinen Weg — sie hingen in verschiedenen Teilen. */
-  const teil = komponenten(nodes);
-  let wahl = null;
-  for (const nr of new Set(teil.values())) {
-    const drin = k => teil.get(k) === nr;
-    const a = naechsteKante(nodes, A.lat, A.lon, drin);
-    const b = naechsteKante(nodes, B.lat, B.lon, drin);
-    if (!a || !b) continue;
-    const schlechter = Math.max(a.dist, b.dist);
-    if (!wahl || schlechter < wahl.schlechter) wahl = { a, b, schlechter };
-  }
+  const wahl = paarEinhaengen(nodes, A, B);
   if (!wahl) throw new Error('keine Gleisgeometrie im Ausschnitt');
   if (wahl.schlechter > 80) {
     throw new Error(`die Steine liegen bis ${nfM.format(wahl.schlechter)} m vom nächsten durchgehenden Gleis entfernt`);
   }
 
-  const na = einfuegen(nodes, wahl.a);
-  const nb = einfuegen(nodes, wahl.b);
-  const sp = shortestPath(nodes, na.key, nb.key);
+  const sp = shortestPath(nodes, wahl.na.key, wahl.nb.key);
   if (!sp) throw new Error('kein durchgehender Gleisweg zwischen den beiden Steinen');
 
   /* Der kürzeste Weg im Gleisnetz muss nicht die Strecke sein — an einem
@@ -1063,29 +1077,34 @@ function entlangLaufen(nodes, startKey, wegVon, strecke) {
 
   let gelaufen = haversine(start.lat, start.lon, nodes.get(jetzt).lat, nodes.get(jetzt).lon);
   const besucht = new Set([startKey, jetzt]);
+  const pfad = [[start.lat, start.lon], [nodes.get(jetzt).lat, nodes.get(jetzt).lon]];
 
   while (gelaufen < strecke) {
     const ein = peilung(nodes.get(vorher), nodes.get(jetzt));
     const weiter = nodes.get(jetzt).adj
       .map(([k]) => k).filter(k => k !== vorher && !besucht.has(k));
-    if (!weiter.length) return null;
+    if (!weiter.length) break;
 
     const kurve = k => Math.abs(((peilung(nodes.get(jetzt), nodes.get(k)) - ein + 540) % 360) - 180);
     const naechst = weiter.reduce((a, b) => kurve(b) < kurve(a) ? b : a);
-    if (kurve(naechst) > 75) return null;          // das ist ein Abzweig, keine Fortsetzung
+    if (kurve(naechst) > 75) break;                // das ist ein Abzweig, keine Fortsetzung
 
     const a = nodes.get(jetzt), b = nodes.get(naechst);
     const d = haversine(a.lat, a.lon, b.lat, b.lon);
     if (gelaufen + d >= strecke) {
       const t = d > 0 ? (strecke - gelaufen) / d : 0;
-      return { lat: a.lat + t * (b.lat - a.lat), lon: a.lon + t * (b.lon - a.lon) };
+      const ziel = { lat: a.lat + t * (b.lat - a.lat), lon: a.lon + t * (b.lon - a.lon) };
+      pfad.push([ziel.lat, ziel.lon]);
+      return { lat: ziel.lat, lon: ziel.lon, pfad, gelaufen: strecke };
     }
     gelaufen += d;
     besucht.add(naechst);
+    pfad.push([b.lat, b.lon]);
     vorher = jetzt;
     jetzt = naechst;
   }
-  return { lat: nodes.get(jetzt).lat, lon: nodes.get(jetzt).lon };
+  const z = nodes.get(jetzt);
+  return { lat: z.lat, lon: z.lon, pfad, gelaufen };
 }
 
 /** Kilometer jenseits des äußersten Steins — nur aus den mitgelieferten Kacheln. */
@@ -1115,30 +1134,22 @@ async function extrapolieren(ref, km, sorted) {
   if (!nodes.size || nodes.size > 60000) return null;
   // Auch hier beide Steine in dieselbe Zusammenhangskomponente — sonst läuft
   // der Lauf auf einem abgehängten Stummel los.
-  const teil = komponenten(nodes);
-  let wahl = null;
-  for (const nr of new Set(teil.values())) {
-    const drin = k => teil.get(k) === nr;
-    const a = naechsteKante(nodes, A.lat, A.lon, drin);
-    const b = naechsteKante(nodes, B.lat, B.lon, drin);
-    if (!a || !b) continue;
-    const schlechter = Math.max(a.dist, b.dist);
-    if (!wahl || schlechter < wahl.schlechter) wahl = { a, b, schlechter };
-  }
+  const wahl = paarEinhaengen(nodes, A, B);
   if (!wahl || wahl.schlechter > 80) return null;
-  const na = einfuegen(nodes, wahl.a);
-  const nb = einfuegen(nodes, wahl.b);
+  const na = wahl.na, nb = wahl.nb;
 
   const ziel = entlangLaufen(nodes, na.key, nodes.get(nb.key), hinaus);
-  if (!ziel) return null;
+  // Der Lauf bricht ab, wo das Gleis endet oder abzweigt — dann nicht raten
+  if (!ziel || ziel.gelaufen < hinaus - 5) return null;
 
   /* Selbstprobe: mit demselben Verfahren die bekannte Strecke zum Nachbarstein
    * laufen. Trifft es dort nicht, hat der Lauf hier nichts zu suchen. An 148
    * Fällen nachgemessen fängt das genau die Ausreißer ab — ohne Probe bis zu
    * 4333 m daneben, mit Probe höchstens 746 m, und in 119 von 127 Fällen besser
    * als der nächstgelegene Stein. */
-  const probe = entlangLaufen(nodes, na.key, ziel, Math.abs(B.km - A.km) * 1000);
-  if (!probe) return null;
+  const nachB = Math.abs(B.km - A.km) * 1000;
+  const probe = entlangLaufen(nodes, na.key, ziel, nachB);
+  if (!probe || probe.gelaufen < nachB - 5) return null;
   const treffer = haversine(B.lat, B.lon, probe.lat, probe.lon);
   if (treffer > EXTRA_PROBE_M) return null;
 
@@ -1147,6 +1158,63 @@ async function extrapolieren(ref, km, sorted) {
     hinaus, abStein: A.km, probe: treffer,
     operator: A.operator, lineRef: A.ref || ref
   };
+}
+
+/* Und dieselbe Sache in der Gegenrichtung: getippt jenseits des äußersten
+ * Steins. Gemeldet an 49,447926 / 10,271642, wo Strecke 5251 weitergeht, die
+ * Kilometrierung aber erst bei km 1,5 anfängt — die App meldete „1.015 m vom
+ * Gleis entfernt", weil sie den Punkt auf das letzte Steinpaar projizierte.
+ *
+ * Gelaufen wird bis EXTRA_MAX_M hinaus, dann wird der Tipp auf diesen Weg
+ * gelotet; die Weglänge bis zum Lot ist die Kilometerdifferenz. */
+async function kmExtrapoliert(ref, lat, lon, sorted) {
+  if (sorted.length < 2) return null;
+
+  let best = null;
+  for (const unten of [true, false]) {
+    const A = unten ? sorted[0] : sorted[sorted.length - 1];
+    const B = unten ? sorted[1] : sorted[sorted.length - 2];
+    if (!B || A === B) continue;
+    // Nur nach draußen: liegt der Tipp näher am Nachbarstein, ist es kein Fall dafür
+    if (haversine(lat, lon, A.lat, A.lon) > haversine(lat, lon, B.lat, B.lon)) continue;
+    if (!segmentOk(unten ? A : B, unten ? B : A, MAX_GLEIS_GAP_KM)) continue;
+
+    const weite = (EXTRA_MAX_M + haversine(A.lat, A.lon, B.lat, B.lon)) * 1.3;
+    const dLat = Math.max(0.02, weite / 110540);
+    const dLon = dLat / Math.max(0.2, Math.cos(A.lat * Math.PI / 180));
+    const bereich = await netzBereich(A.lat - dLat, A.lon - dLon, A.lat + dLat, A.lon + dLon);
+    if (!bereich) continue;
+
+    const gleise = bereich.wege.filter(w =>
+      w.ref && String(w.ref).split(';').some(t => t.trim() === String(ref)));
+    if (!gleise.length) continue;
+
+    const nodes = buildGraph(gleise);
+    if (!nodes.size || nodes.size > 60000) continue;
+    const wahl = paarEinhaengen(nodes, A, B);
+    if (!wahl || wahl.schlechter > 80) continue;
+
+    const lauf = entlangLaufen(nodes, wahl.na.key, nodes.get(wahl.nb.key), EXTRA_MAX_M);
+    if (!lauf || lauf.pfad.length < 2) continue;
+
+    const t = projectOnPath(lauf.pfad, lat, lon);
+    if (!t || t.along < 1) continue;               // liegt nicht draußen, sondern beim Stein
+
+    const nachB = Math.abs(B.km - A.km) * 1000;
+    const probe = entlangLaufen(nodes, wahl.na.key, lauf, nachB);
+    if (!probe || probe.gelaufen < nachB - 5) continue;
+    const treffer = haversine(B.lat, B.lon, probe.lat, probe.lon);
+    if (treffer > EXTRA_PROBE_M) continue;
+
+    const km = A.km + (unten ? -1 : 1) * (t.along / 1000);
+    const kandidat = {
+      km, lat: t.lat, lon: t.lon, quality: 'extrapoliert',
+      hinaus: t.along, abStein: A.km, probe: treffer, offset: t.dist,
+      operator: A.operator, lineRef: A.ref || ref
+    };
+    if (t.dist <= 400 && (!best || t.dist < best.offset)) best = kandidat;
+  }
+  return best;
 }
 
 /* Position → Kilometer entlang des echten Gleisverlaufs.
@@ -1268,7 +1336,7 @@ let recent = [];   // nicht "history" nennen — das ist window.history
 /* ============================ Karte ============================ */
 
 let map, baseOsm, baseSat, baseDop, baseRelief, ormLayer, parzLayer;
-let msLayer, trackLayer, pointLayer, meLayer;
+let msLayer, trackLayer, pointLayer, meLayer, merkLayer;
 /* Hintergründe schließen sich aus, Auflagen nicht — als Verzeichnis gehalten,
  * damit ein weiterer Dienst nur ein Eintrag und ein Knopf ist. */
 let baseLayers = {};
@@ -1351,6 +1419,7 @@ function initMap() {
   trackLayer = L.layerGroup().addTo(map);
   pointLayer = L.layerGroup().addTo(map);
   meLayer = L.layerGroup().addTo(map);
+  merkLayer = L.layerGroup().addTo(map);
 
   /* Keine Zoomknöpfe: Am Rechner zoomt das Mausrad, am Gerät zwei Finger oder
    * ein Doppeltipp. Der Platz rechts unten gehört damit den eigenen Knöpfen. */
@@ -1364,6 +1433,7 @@ function initMap() {
   if (prefs.wms && prefs.wms.on) wmsApply(true);
 
   map.on('click', onMapClick);
+  merkPunktBinden();
   map.on('zoom rotate', gesteBild);
   map.on('zoomend rotateend moveend', gesteEnde);
   map.on('move zoom rotate', messLiveZeichnen);
@@ -2719,6 +2789,93 @@ function drawPoint() {
   }).addTo(pointLayer);
 }
 
+/* ---- Punkt von Hand setzen ----
+ *
+ * Ein kurzer Tipp liest sofort den Kilometer ab. Das ist bequem, im Gelände
+ * aber schnell versehentlich, und deshalb gibt es den Fadenkreuz-Knopf zum
+ * Abschalten. Gewünscht war stattdessen ein bewusster Griff: lange drücken
+ * (am Rechner die rechte Maustaste) setzt einen Punkt, und erst ein Knopf in
+ * der Sprechblase rechnet ihn auf die Strecke — genau wie bei einem Punkt aus
+ * einer KML-Datei. Von dort führt auch der Weg direkt zu Google Maps.
+ */
+const MERK_DAUER = 500;      // ms, ab wann ein Druck als „lang" gilt
+const MERK_WACKEL = 12;      // px, so viel darf der Finger dabei wandern
+
+function merkPunkt(lat, lon) {
+  if (messModus) return;
+  merkLayer.clearLayers();
+  const wo = [lat, lon];
+
+  L.marker(wo, {
+    pane: 'kmlIconPane', keyboard: false,
+    icon: L.divIcon({ className: '', html: '<div class="merk-pin"></div>',
+      iconSize: [18, 18], iconAnchor: [9, 9] })
+  }).addTo(merkLayer);
+
+  const blase = L.popup({
+    className: 'kml-pop', maxWidth: 300,
+    autoPanPaddingTopLeft: L.point(14, 86), autoPanPaddingBottomRight: L.point(14, 24)
+  }).setLatLng(wo).setContent(
+    `<b>Gesetzter Punkt</b>` +
+    `<span>${fmtCoord(lat, lon)}</span>` +
+    `<a href="${gmapsUrl(lat, lon)}" target="_blank" rel="noopener">In Google Maps öffnen</a>` +
+    `<a href="${gmapsRoute(lat, lon)}" target="_blank" rel="noopener" class="merk-zweit">Route dorthin</a>` +
+    `<button type="button" class="kml-km" data-merkkm>Kilometer bestimmen` +
+    `<small>rechnet die Stelle auf die Strecke</small></button>` +
+    `<button type="button" class="kml-km merk-weg" data-merkweg>Punkt entfernen</button>`
+  ).openOn(map);
+
+  const el = blase.getElement();
+  const knopf = el && el.querySelector('[data-merkkm]');
+  if (knopf) knopf.addEventListener('click', () => {
+    map.closePopup();
+    kmAnStelle(lat, lon, PUNKT_TOL);
+  });
+  const weg = el && el.querySelector('[data-merkweg]');
+  if (weg) weg.addEventListener('click', () => { map.closePopup(); merkLayer.clearLayers(); });
+}
+
+function merkPunktBinden() {
+  let zuletzt = 0;
+
+  map.on('contextmenu', ev => {
+    L.DomEvent.preventDefault(ev);
+    // Auf dem Gerät schickt der Browser nach einem langen Druck oft noch ein
+    // contextmenu hinterher — das wäre dann der zweite Auslöser für dieselbe Geste.
+    if (Date.now() - zuletzt < 900) return;
+    zuletzt = Date.now();
+    merkPunkt(ev.latlng.lat, ev.latlng.lng);
+  });
+
+  const flaeche = map.getContainer();
+  let uhr = null, start = null;
+
+  const abbrechen = () => { clearTimeout(uhr); uhr = null; start = null; };
+
+  flaeche.addEventListener('touchstart', ev => {
+    if (ev.touches.length !== 1) { abbrechen(); return; }
+    const t = ev.touches[0];
+    start = { x: t.clientX, y: t.clientY };
+    clearTimeout(uhr);
+    uhr = setTimeout(() => {
+      uhr = null;
+      const k = flaeche.getBoundingClientRect();
+      const p = map.containerPointToLatLng(L.point(start.x - k.left, start.y - k.top));
+      zuletzt = Date.now();
+      merkPunkt(p.lat, p.lng);
+    }, MERK_DAUER);
+  }, { passive: true });
+
+  flaeche.addEventListener('touchmove', ev => {
+    if (!start || !ev.touches.length) return;
+    const t = ev.touches[0];
+    if (Math.hypot(t.clientX - start.x, t.clientY - start.y) > MERK_WACKEL) abbrechen();
+  }, { passive: true });
+
+  flaeche.addEventListener('touchend', abbrechen, { passive: true });
+  flaeche.addEventListener('touchcancel', abbrechen, { passive: true });
+}
+
 /* ============================ Messen ============================ */
 
 /* Luftlinie zwischen angetippten Punkten, bewusst ohne Netzabfrage: Im Gelände
@@ -3410,6 +3567,15 @@ async function useLineAt(ref, seeds, lat, lon) {
     if (hit && hit.dist <= 400) {
       const punkt = await kartePunkt(ref, hit, lat, lon, e.sorted[0].operator);
       applyPoint(ref, punkt.km, punkt);
+      return;
+    }
+
+    /* Jenseits des äußersten Steins gibt es kein Paar, das den Punkt einschließt.
+     * Dann am Gleis hinauslaufen statt den Punkt auf das letzte Steinpaar zu
+     * loten und ihn als „zu weit weg" abzulehnen. */
+    const raus = await kmExtrapoliert(ref, lat, lon, e.sorted);
+    if (raus) {
+      applyPoint(ref, raus.km, raus);
       return;
     }
 
