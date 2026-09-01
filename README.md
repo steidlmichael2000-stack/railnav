@@ -202,8 +202,55 @@ der Fälle. Die Streuung der beiden Klammersteine ist also nicht der begrenzende
 ist die Streuung des Vergleichssteins selbst, mit dem gemessen wird. Die Zahlen der Tabelle sind damit
 wie in der anderen Richtung eine Obergrenze und nicht der Fehler des Verfahrens.
 
-**Solange ein Steinpaar da ist, gibt es in dieser Richtung deshalb keine Feinrechnung entlang des
-Gleises.** Sie könnte nur diese wenigen Meter wegnehmen und kostet eine Overpass-Abfrage von
+### Der Marker gehört aufs Gleis, nicht auf die Sehne
+
+Gemeldet mit zwei Bildschirmfotos an Strecke 5321: Der gesetzte Punkt springt auf die gerade
+Verbindung zwischen den Kilometersteinen und liegt damit sichtbar im Feld neben der Schiene. Das
+war kein Anzeigefehler, sondern genau das, was die App gerechnet hat — und diese Koordinate geht
+in *In Google Maps öffnen*, *Route*, *Kopieren* und *Teilen*.
+
+Nachgemessen an denselben 234 Zwischensteinen wie oben liegt der Punkt auf der Sehne im Median
+16 m neben dem Gleis, im ungünstigen Zehntel 87 m, im schlechtesten Fall 378 m. An den beiden
+gemeldeten Stellen waren es 128 m und **245 m**.
+
+Solange der Verlauf mitgeliefert ist, kostet die Abhilfe nichts: Der angezeigte Punkt wird auf das
+tatsächlich erfasste Gleis dieser Strecke gesetzt.
+
+| gemeldeter Fall | Abstand vom Gleis vorher | nachher |
+| --- | --- | --- |
+| KML-Punkt `5321CW00300` | 124 m | **8 m** |
+| Tipp bei km 62,4 | 245 m | **0 m** |
+| Meldepunkt Bischofswiesen | 92 m (zur Sehne) | **50 m** (echter Abstand zum Gleis) |
+
+Die 8 m beim KML-Punkt sind der wahre Abstand zur OSM-Gleisachse, die 50 m bei Bischofswiesen
+ebenso — dieselben 51 m, die eine unabhängige Overpass-Abfrage zu Beginn ergeben hatte. Was vorher
+als „querab der Linie" dastand, war der Abstand zur Sehne und damit die falsche Zahl.
+
+**Der Kilometer bleibt davon unberührt.** Angezeigt wird „deine Stelle, auf die Schiene gesetzt",
+nicht „der Ort von Kilometer X".
+
+### Wann die Sehne den Bogen doch zu weit abschneidet
+
+Eingewandt wurde: Das Argument mit dem Kreisbogen trage nur, solange zwischen den Steinen *ein*
+Bogen liegt — bei mehreren Bögen plus Geraden hebe sich nichts mehr auf. Das stimmt, und es lässt
+sich seit den Kacheln billig prüfen. An 553 übersprungenen Zwischensteinen:
+
+| | n | km über Sehne | km über Gleis | Gleis besser |
+| --- | --- | --- | --- | --- |
+| unter 1,5 km, gerade | 211 | **14** / 47 m | 23 / 62 m | 33 % |
+| unter 1,5 km, krumm | 240 | **14** / 50 m | 22 / 59 m | 38 % |
+| über 1,5 km, gerade | 33 | **18** / 51 m | 26 / 88 m | 27 % |
+| über 1,5 km, krumm | 69 | 34 / 115 m | **22** / **72** m | **57 %** |
+
+*Median / 90. Perzentil; „krumm" heißt Gleisweg mindestens 2 % länger als die Luftlinie.*
+
+Der Einwand trifft also zu, aber weder die Länge noch die Krümmung allein ist der Auslöser — es
+ist, **wie viel Weg die Sehne abschneidet**. Ab 200 m Umweg wird deshalb entlang des Gleises
+gerechnet. Das greift in 4 % der Fälle und räumt die Ausreißer weg: Fälle über 100 m Fehler gehen
+von 7 auf 1, das 99. Perzentil von 144 auf 106 m, bei unverändertem Median. Ein großer Sprung ist
+es nicht — der Rest ist die Erfassungsgenauigkeit der Steine, gegen die kein Verlauf hilft.
+
+**Unterhalb dieser Schwelle gibt es weiter keine Feinrechnung des Kilometers.** Sie könnte nur diese wenigen Meter wegnehmen und kostet eine Overpass-Abfrage von
 15–40 s. Angezeigt wird stattdessen die gemessene Zahl: Das Etikett lautet „von der Karte ±57 m",
 und unter *Herkunft & Genauigkeit* steht, woher der Wert kommt.
 

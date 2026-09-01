@@ -43,6 +43,10 @@ const MAX_GAP_KM = 8;
  * falsch aus und würde Klicks weit neben dem echten Gleis an sich ziehen. */
 const MAX_DRAW_GAP_KM = 3;
 const CLICK_TOL_PX = 34;     // Klicktoleranz quer zur Strecke
+/* Ab wie viel abgeschnittenem Weg lohnt es, den Kilometer entlang des Gleises
+ * statt über die Sehne zu lesen? Gemessen an 553 Zwischensteinen — siehe
+ * kartePunkt(). Nur wirksam, wo der Verlauf mitgeliefert ist. */
+const UMWEG_GRENZE = 200;
 /* Toleranz quer zur Strecke für einen gesetzten Punkt statt eines Fingertipps —
  * etwa aus einer KML-Datei. Dessen Koordinate steht fest und soll nicht je nach
  * Zoomstufe an eine andere Linie springen; 80 m ist derselbe Umkreis, mit dem
@@ -565,6 +569,37 @@ function netzKachel(name) {
   return netzKacheln.get(name);
 }
 
+/* Den angezeigten Punkt auf das wirklich erfasste Gleis setzen.
+ *
+ * Der Kilometer wird weiter aus der Sehne zwischen zwei Steinen gelesen — an
+ * 234 uebersprungenen Zwischensteinen nachgemessen ist die Sehne dabei besser
+ * als die Rechnung entlang des Gleises (Median 15 gegen 25 m), weil beim
+ * Tippen die Position ja feststeht und sich die Bogenabweichung zur Mitte hin
+ * aufhebt. Uebrig bleibt die Erfassungsgenauigkeit der Steine.
+ *
+ * Die angezeigte Lage ist eine andere Frage. Der Punkt auf der Sehne liegt in
+ * denselben 234 Faellen im Median 16 m neben dem Gleis, im ungünstigen Zehntel
+ * 87 m, im schlechtesten Fall 378 m — bei einem gemeldeten Punkt an Strecke
+ * 5321 waren es 128 m. Diese Koordinate geht in „In Google Maps öffnen",
+ * „Route", „Kopieren" und „Teilen": Sie muss auf der Schiene liegen und nicht
+ * im Feld daneben. Solange der Verlauf mitgeliefert ist, kostet das nichts.
+ */
+async function aufGleisSetzen(ref, lat, lon, umkreis) {
+  const d = umkreis / 110540;
+  const dLon = umkreis / (111320 * Math.max(0.2, Math.cos(lat * Math.PI / 180)));
+  const bereich = await netzBereich(lat - d, lon - dLon, lat + d, lon + dLon);
+  if (!bereich) return null;
+
+  const passt = w => w.ref && String(w.ref).split(';').some(t => t.trim() === String(ref));
+  let best = null;
+  for (const w of bereich.wege) {
+    if (!passt(w)) continue;                 // nur das Gleis dieser Strecke
+    const t = projectOnPath(w.geometry.map(p => [p.lat, p.lon]), lat, lon);
+    if (t && (!best || t.dist < best.dist)) best = t;
+  }
+  return best && best.dist <= umkreis ? best : null;
+}
+
 /** Alles Mitgelieferte in einem Rechteck — oder null, wenn dort nichts erzeugt wurde. */
 async function netzBereich(sued, west, nord, ost) {
   const ix = await netzBereit();
@@ -803,7 +838,7 @@ function zeichneGleisweg(path) {
  * kein brauchbarer Weg findet, muss Overpass ran. Der Rückfall ist wichtig:
  * Die Kacheln lassen Anschluss- und Rangiergleise weg, und an einer Stelle,
  * wo der Verlauf ausgerechnet darüber führt, käme sonst gar nichts heraus. */
-async function gleisWegZwischen(A, B) {
+async function gleisWegZwischen(A, B, nurLokal = false) {
   const pad = 0.012;
   const lokal = await netzBereich(
     Math.min(A.lat, B.lat) - pad, Math.min(A.lon, B.lon) - pad,
@@ -812,6 +847,8 @@ async function gleisWegZwischen(A, B) {
   if (lokal && lokal.wege.length) {
     try { return wegAusWegen(lokal.wege, A, B); } catch { /* dann eben über Overpass */ }
   }
+  // nurLokal: für Rechnungen, die sich nur lohnen, solange sie nichts kosten
+  if (nurLokal) return null;
 
   const ways = await railGeometry(A, B);
   if (!ways.length) throw new Error('keine Gleisgeometrie im Ausschnitt');
@@ -853,14 +890,15 @@ function wegAusWegen(ways, A, B) {
  * Wie genau das ist, steht bei GLEIS_ERR. Unterhalb von MAX_DRAW_GAP_KM wird
  * weiter die Sehne genommen: Dort ist sie gemessen genauso gut und kostet keine
  * Overpass-Abfrage von Sekunden. */
-async function kmEntlangGleis(ref, lat, lon) {
+async function kmEntlangGleis(ref, lat, lon, nurLokal = false) {
   const e = lineCache.get(ref);
   if (!e || e.sorted.length < 2) return null;
 
   const grob = projectOnLine(e.sorted, lat, lon, MAX_GAP_KM);
   if (!grob) return null;
 
-  const weg = await gleisWegZwischen(grob.a, grob.b);
+  const weg = await gleisWegZwischen(grob.a, grob.b, nurLokal);
+  if (!weg) return null;
   const t = projectOnPath(weg.path, lat, lon);
   if (!t || !t.len) return null;
 
@@ -2732,6 +2770,49 @@ async function onMapClick(ev) {
   await kmAnStelle(ev.latlng.lat, ev.latlng.lng, toleranceMeters(ev.latlng));
 }
 
+/** Aus einem Sehnentreffer den anzuzeigenden Punkt bauen — nach Möglichkeit auf dem Gleis.
+ *
+ * Der Kilometer bleibt der aus der Sehne gelesene; verschoben wird nur, wo der
+ * Punkt gezeichnet und weitergereicht wird. Angezeigt heißt das: „deine Stelle,
+ * auf die Schiene gesetzt" und nicht „der Ort von Kilometer X". */
+async function kartePunkt(ref, hit, lat, lon, operator) {
+  /* Liegt der Verlauf mitgeliefert vor, entscheidet der Umweg, welcher
+   * Kilometer gilt. Ein einzelner Bogen schadet der Sehne nicht — entlang
+   * eines Kreisbogens hebt sich die Abweichung zur Mitte hin auf. Erst wenn
+   * zwischen den Steinen mehrere Bögen und Geraden liegen, trägt dieses
+   * Argument nicht mehr, und dann schneidet die Sehne spürbar ab.
+   *
+   * Gemessen an 553 übersprungenen Zwischensteinen ist der Steinabstand
+   * allein der schlechtere Auslöser: unter 1,5 km ist die Sehne besser,
+   * gleich ob es dort krümmt (Median 14 m gegen 22 m), über 1,5 km und krumm
+   * dreht es sich um (34/115 m gegen 22/72 m). Was zählt, ist also nicht die
+   * Länge und nicht die Krümmung, sondern wie viel Weg die Sehne abschneidet.
+   * Ab 200 m Umweg zu wechseln räumt die Ausreißer weg: Fälle über 100 m
+   * Fehler gehen von 7 auf 1, das 99. Perzentil von 144 auf 106 m, bei
+   * unverändertem Median. */
+  const weg = await kmEntlangGleis(ref, lat, lon, true);
+  if (weg && weg.wegLaenge - weg.chord > UMWEG_GRENZE) {
+    const { pfad, ...punkt } = weg;
+    punkt.umweg = weg.wegLaenge - weg.chord;
+    return punkt;
+  }
+
+  const p = {
+    km: hit.km,
+    lat: hit.lat, lon: hit.lon, quality: 'karte',
+    between: hit.between, offset: hit.dist, chord: hit.chord, spanRatio: hit.spanRatio,
+    operator, lineRef: ref
+  };
+  const gleis = await aufGleisSetzen(ref, lat, lon, Math.max(250, hit.dist + 200));
+  if (gleis) {
+    p.aufGleis = haversine(hit.lat, hit.lon, gleis.lat, gleis.lon);
+    p.lat = gleis.lat;
+    p.lon = gleis.lon;
+    p.offset = gleis.dist;      // echter Abstand quer zum Gleis statt zur Sehne
+  }
+  return p;
+}
+
 /* Welcher Kilometer gilt an dieser Stelle?
  *
  * Zuerst die schon geladene Strecke — das geht ohne Netz und ohne Wartezeit.
@@ -2770,12 +2851,9 @@ async function kmAnStelle(lat, lng, tol) {
     }
 
     if (hit && hit.dist <= tol) {
-      applyPoint(view.ref, hit.km, {
-        lat: hit.lat, lon: hit.lon, quality: 'karte',
-        between: hit.between, offset: hit.dist, chord: hit.chord, spanRatio: hit.spanRatio,
-        operator: e.sorted[0].operator, lineRef: view.ref
-      });
-      coverage(view.ref, hit.km).then(drawMilestones).catch(() => { });
+      const punkt = await kartePunkt(view.ref, hit, lat, lng, e.sorted[0].operator);
+      applyPoint(view.ref, punkt.km, punkt);
+      coverage(view.ref, punkt.km).then(drawMilestones).catch(() => { });
       return;
     }
   }
@@ -2974,11 +3052,8 @@ async function useLineAt(ref, seedKm, lat, lon) {
 
     const hit = projectOnLine(e.sorted, lat, lon);
     if (hit && hit.dist <= 400) {
-      applyPoint(ref, hit.km, {
-        lat: hit.lat, lon: hit.lon, quality: 'karte',
-        between: hit.between, offset: hit.dist, chord: hit.chord, spanRatio: hit.spanRatio,
-        operator: e.sorted[0].operator, lineRef: ref
-      });
+      const punkt = await kartePunkt(ref, hit, lat, lon, e.sorted[0].operator);
+      applyPoint(ref, punkt.km, punkt);
       return;
     }
 
@@ -3150,12 +3225,17 @@ function renderBottom() {
     const err = tapError(p.chord || 0);
     detail = `Aus dem Kartentipp abgeleitet, zwischen den Steinen bei km ${fmtKm(p.between[0])} und ` +
       `${fmtKm(p.between[1])}, ${nfM.format(p.chord || 0)} m auseinander` +
-      (p.offset > 15 ? `, ${nfM.format(p.offset)} m querab der Linie` : '') + `. ` +
+      (p.offset > 15 ? `, ${nfM.format(p.offset)} m querab des Gleises` : '') + `. ` +
+      (p.aufGleis > 5
+        ? `Angezeigt wird die Stelle auf dem tatsächlich erfassten Gleis — die gerade Verbindung ` +
+          `zwischen den beiden Steinen läuft hier ${nfM.format(p.aufGleis)} m daneben. Der Kilometer ` +
+          `stammt weiter von dieser Verbindung: an 234 übersprungenen Zwischensteinen nachgemessen ` +
+          `liest sie sich genauer als eine Rechnung entlang des Gleises (15 gegenüber 25 m im Median), ` +
+          `weil beim Tippen die Position ja feststeht. `
+        : '') +
       `An echten Zwischensteinen nachgemessen lag der so gelesene Kilometer typisch ` +
       `${nfM.format(err.typical)} m neben dem wahren, im ungünstigen Zehntel ${nfM.format(err.worst)} m. ` +
-      `Das steckt fast ganz in der Erfassung der Steine, nicht in der Sehnennäherung — eine ` +
-      `Feinrechnung entlang des Gleises würde daran nur wenige Meter ändern und bleibt deshalb der ` +
-      `umgekehrten Richtung vorbehalten.`;
+      `Das steckt fast ganz in der Erfassung der Steine, nicht in der Sehnennäherung.`;
     /* Die Ausnahme, in der die Spanne oben nicht mehr gilt: Passen Luftlinie und
      * Kilometerdifferenz der beiden Steine nicht zusammen, steckt dahinter ein
      * Kilometersprung oder ein falsch erfasster Stein. Über dieselben 2050
