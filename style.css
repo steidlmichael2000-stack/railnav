@@ -135,7 +135,7 @@ body {
 .mapmess {
   position: fixed;
   right: var(--gap);
-  bottom: calc(var(--bh) + 150px + env(safe-area-inset-bottom));
+  bottom: calc(var(--bh) + 102px + env(safe-area-inset-bottom));
   z-index: 450;
   width: 42px; height: 42px;
   display: grid; place-items: center;
@@ -147,24 +147,6 @@ body {
 }
 .mapmess svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linejoin: round; stroke-linecap: round; }
 .mapmess.is-on { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, transparent); }
-
-/* Tippen scharf stellen — sitzt über dem Standortknopf */
-.maptap {
-  position: fixed;
-  right: var(--gap);
-  bottom: calc(var(--bh) + 102px + env(safe-area-inset-bottom));
-  z-index: 450;
-  width: 42px; height: 42px;
-  display: grid; place-items: center;
-  border-radius: 50%; border: 1px solid var(--line);
-  background: var(--glass); color: var(--muted-2);
-  box-shadow: var(--shadow);
-  backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
-  cursor: pointer;
-}
-.maptap svg { width: 21px; height: 21px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; }
-.maptap.is-on { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
-.maptap.is-on svg circle { fill: currentColor; }
 
 /* ---------- schwebende Bedienung ---------- */
 
@@ -580,10 +562,6 @@ body {
   box-shadow: 0 0 0 2px rgba(0, 0, 0, .35);
 }
 .kml-pop .merk-zweit { margin-left: 12px; }
-.kml-km.merk-weg {
-  margin-top: 6px; font-weight: 500;
-  border-color: var(--line); background: transparent; color: var(--muted);
-}
 
 .fine { font-size: .74rem; color: var(--muted); line-height: 1.6; margin: 0 0 8px; }
 .fine:last-child { margin-bottom: 0; }

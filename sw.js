@@ -5,7 +5,7 @@
  * neue Version sofort ankommt statt hinter einem alten Cache zu hängen.
  */
 
-const VERSION = 'v16';
+const VERSION = 'v17';
 const SHELL = `railnav-shell-${VERSION}`;
 const TILES = `railnav-tiles-${VERSION}`;
 const DATA = `railnav-data-${VERSION}`;

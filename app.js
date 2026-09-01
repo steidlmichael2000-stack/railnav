@@ -2821,9 +2821,18 @@ function merkPunkt(lat, lon) {
     `<a href="${gmapsUrl(lat, lon)}" target="_blank" rel="noopener">In Google Maps öffnen</a>` +
     `<a href="${gmapsRoute(lat, lon)}" target="_blank" rel="noopener" class="merk-zweit">Route dorthin</a>` +
     `<button type="button" class="kml-km" data-merkkm>Kilometer bestimmen` +
-    `<small>rechnet die Stelle auf die Strecke</small></button>` +
-    `<button type="button" class="kml-km merk-weg" data-merkweg>Punkt entfernen</button>`
+    `<small>rechnet die Stelle auf die Strecke</small></button>`
   ).openOn(map);
+
+  /* Sprechblase zu heißt Punkt weg — über das ×, mit Escape oder durch einen
+   * Griff daneben. Ein eigener Knopf „Punkt entfernen" wäre daneben nur eine
+   * zweite Art, dasselbe zu tun. */
+  const aufraeumen = ev => {
+    if (ev.popup !== blase) return;
+    merkLayer.clearLayers();
+    map.off('popupclose', aufraeumen);
+  };
+  map.on('popupclose', aufraeumen);
 
   const el = blase.getElement();
   const knopf = el && el.querySelector('[data-merkkm]');
@@ -2831,8 +2840,6 @@ function merkPunkt(lat, lon) {
     map.closePopup();
     kmAnStelle(lat, lon, PUNKT_TOL);
   });
-  const weg = el && el.querySelector('[data-merkweg]');
-  if (weg) weg.addEventListener('click', () => { map.closePopup(); merkLayer.clearLayers(); });
 }
 
 function merkPunktBinden() {
@@ -3211,17 +3218,15 @@ function toleranceMeters(latlng) {
   return Math.max(pixelInMeter(latlng, CLICK_TOL_PX), 25);
 }
 
-/** Liest ein Tipp auf die Karte den Kilometer, oder ist das abgeschaltet? */
-const tippAn = () => prefs.tap !== false;
-
-async function onMapClick(ev) {
-  // Im Messmodus setzt jeder Tipp einen Messpunkt, auch bei abgeschaltetem Ablesen
-  if (messModus) { messTipp(ev.latlng); return; }
-  // Abgeschaltet, damit ein versehentlicher Tipp nicht die Anzeige umwirft.
-  // Kilometersteine bleiben antippbar — die trifft man nicht zufällig.
-  if (!tippAn() || view.busy) return;
-  closeSuggest();
-  await kmAnStelle(ev.latlng.lat, ev.latlng.lng, toleranceMeters(ev.latlng));
+/* Ein kurzer Tipp liest bewusst nichts mehr ab.
+ *
+ * Früher las jeder Tipp sofort den Kilometer, und ein Fadenkreuz-Knopf schaltete
+ * das ab, weil im Gelände ständig versehentlich getippt wird. Beides ist
+ * überflüssig, seit ein langer Druck einen Punkt setzt: Der Griff ist dann
+ * bewusst, und die Sprechblase fragt, was damit geschehen soll. Kilometersteine
+ * und KML-Objekte bleiben antippbar — die trifft man nicht zufällig. */
+function onMapClick(ev) {
+  if (messModus) messTipp(ev.latlng);
 }
 
 /** Aus einem Sehnentreffer den anzuzeigenden Punkt bauen — nach Möglichkeit auf dem Gleis.
@@ -4213,11 +4218,6 @@ function syncButtons() {
     mb.setAttribute('aria-pressed', messModus ? 'true' : 'false');
   }
 
-  const tb = $('#mapTapBtn');
-  if (tb) {
-    tb.classList.toggle('is-on', tippAn());
-    tb.setAttribute('aria-pressed', tippAn() ? 'true' : 'false');
-  }
   const kn = $('#kmlNamenBtn');
   if (kn) kn.classList.toggle('is-on', prefs.kmlNamen !== false);
 
@@ -4306,15 +4306,6 @@ function bind() {
   on('#mapLocBtn', 'click', locate);
 
   on('#mapMessBtn', 'click', () => { if (messModus) messEnde(); else messStart(); });
-
-  on('#mapTapBtn', 'click', () => {
-    prefs.tap = !tippAn();
-    saveStore();
-    syncButtons();
-    toast(tippAn()
-      ? 'Ein Tipp auf die Karte liest jetzt den Kilometer.'
-      : 'Tippen auf die Karte ist aus — dieser Knopf schaltet es wieder ein.');
-  });
 
   on('#kmlNamenBtn', 'click', () => {
     prefs.kmlNamen = prefs.kmlNamen === false;

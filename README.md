@@ -1,7 +1,7 @@
 # Railnav
 
 Streckennummer und Kilometer eingeben — Position auf der Karte sehen und in Google Maps öffnen.
-Oder umgekehrt: auf die Karte tippen und ablesen, welcher Kilometer das ist.
+Oder umgekehrt: auf eine Stelle der Karte lange drücken und ablesen, welcher Kilometer das ist.
 
 Eine einzelne statische Webseite, kein Server, keine Anmeldung. Läuft auf dem Handy genauso wie
 am Rechner und lässt sich als App auf den Startbildschirm legen.
@@ -10,7 +10,8 @@ am Rechner und lässt sich als App auf den Startbildschirm legen.
 
 ## Was es kann
 
-- **Beide Richtungen.** Strecke + km → Position, und Tippen auf die Karte → Strecke + km.
+- **Beide Richtungen.** Strecke + km → Position, und ein langer Druck auf die Karte →
+  Strecke + km.
 - **Kilometersteine sind sichtbar.** Alle erfassten Steine der Strecke stehen beschriftet auf der
   Karte, verbunden zu einer Linie. Man sieht also, worauf sich die Angabe stützt — und kann einen
   Stein direkt antippen, statt zu interpolieren.
@@ -51,15 +52,15 @@ am Rechner und lässt sich als App auf den Startbildschirm legen.
 Eingabe: `12,5` oder `12.5`, auch Hektometer-Schreibweise `14+250` (= km 14,250).
 Nur die Streckennummer ohne Kilometer zeigt den Streckenverlauf.
 
-Die Anzeige unten lässt sich über das **×** wieder wegdrücken, und der Fadenkreuz-Knopf auf der
-Karte schaltet das Ablesen durch Tippen ganz ab — dann wirft ein versehentlicher Tipp die Anzeige
-nicht mehr um. Kilometersteine bleiben antippbar, die trifft man nicht zufällig.
-
 **Lange drücken setzt einen Punkt** (am Rechner die rechte Maustaste). Es erscheint eine
 Sprechblase mit der Koordinate, dem Weg zu Google Maps und einem Knopf *Kilometer bestimmen* —
-genau wie bei einem Punkt aus einer KML-Datei. Das ist der bewusste Griff für alle, die den
-schnellen Tipp lieber abschalten: Erst setzt man den Punkt, dann entscheidet man, was damit
-geschehen soll.
+genau wie bei einem Punkt aus einer KML-Datei. Das **×** schließt sie und nimmt den Punkt mit.
+
+**Ein kurzer Tipp liest bewusst nichts ab.** Früher tat er das sofort, und ein Fadenkreuz-Knopf
+schaltete es ab, weil im Gelände ständig versehentlich getippt wird. Beides ist überflüssig,
+seit der lange Druck einen Punkt setzt: Der Griff ist dann bewusst, und die Sprechblase fragt,
+was damit geschehen soll. Kilometersteine und KML-Objekte bleiben antippbar — die trifft man
+nicht zufällig. Die Anzeige unten lässt sich über ihr eigenes **×** wegdrücken.
 
 Der Knopf mit dem Lineal darüber schaltet das **Messen** ein. Solange es läuft, setzt jeder Tipp
 einen Messpunkt statt einen Kilometer abzulesen. **Kilometersteine und Objekte aus geladenen
