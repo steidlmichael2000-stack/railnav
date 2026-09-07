@@ -12,6 +12,10 @@ am Rechner und lässt sich als App auf den Startbildschirm legen.
 
 - **Beide Richtungen.** Strecke + km → Position, und ein langer Druck auf die Karte →
   Strecke + km.
+- **Der eigene Kilometer läuft mit.** Solange der Standort verfolgt wird, steht in der Zeile unter
+  der Suchleiste, bei welchem Kilometer welcher Strecke man gerade steht — ohne Zutun, ohne Netz und
+  bei jeder neuen Ortung. Wer an der Strecke läuft, schaut also nur hin. Ein Tipp auf die Zahl hält
+  sie fest.
 - **Kilometersteine sind sichtbar.** Alle erfassten Steine der Strecke stehen beschriftet auf der
   Karte, verbunden zu einer Linie. Man sieht also, worauf sich die Angabe stützt — und kann einen
   Stein direkt antippen, statt zu interpolieren.
@@ -32,7 +36,7 @@ am Rechner und lässt sich als App auf den Startbildschirm legen.
   Punkt bleibt von allein aktuell. Die Karte fährt dabei nur beim ersten Fix hin und bewegt sich
   danach **nie von selbst**: Beim Zielen und Messen würde eine nachziehende Karte gegen die eigene
   Hand arbeiten. Ein Tipp auf den Knopf holt die Karte zum Standort zurück, der nächste beendet die
-  Verfolgung. Darüber erscheint eine Zeile mit der Ortungsgenauigkeit, dem
+  Verfolgung. Darüber erscheint eine Zeile mit dem **eigenen Kilometer**, der Ortungsgenauigkeit, dem
   Abstand zum letzten Messpunkt und **Entfernung samt Richtungspfeil zum nächsten Objekt der
   geladenen KML-Dateien** — damit lassen sich Punkte im Gelände ablaufen.
 - **Messen** — Punkte auf der Karte antippen, die Luftlinie steht als Maßzahl an jedem Abschnitt
@@ -255,6 +259,58 @@ beiden Nachbarn. Median 15 m gegenüber 14 m, 90. Perzentil 45 m gegenüber 48 m
 der Fälle. Die Streuung der beiden Klammersteine ist also nicht der begrenzende Faktor — was bleibt,
 ist die Streuung des Vergleichssteins selbst, mit dem gemessen wird. Die Zahlen der Tabelle sind damit
 wie in der anderen Richtung eine Obergrenze und nicht der Fehler des Verfahrens.
+
+### Kilometer live aus dem Standort
+
+Gewünscht im Gelände: den eigenen Standpunkt auf die Trasse gerechnet sehen, während man an der
+Strecke läuft, statt dafür jedes Mal einen Punkt zu setzen. Solange die Standortverfolgung läuft,
+steht der Kilometer deshalb in der Zeile unter der Suchleiste und rechnet sich bei jeder Meldung
+des Geräts neu; auf der Karte zeigt ein gestricheltes Lot vom Standortpunkt auf die Stelle, an der
+er auf dem Gleis landet.
+
+**Gerechnet wird nichts Neues.** Es ist dieselbe Funktion wie bei einem gesetzten Punkt: Standort
+auf den Zug der Kilometersteine loten, Kilometer aus der Sehne lesen, und wo die Sehne über 200 m
+Weg abschneidet, am tatsächlichen Gleisverlauf entlang messen. Damit gilt auch die Tabelle
+darüber unverändert. Hinzu kommt allein die Ortungsungenauigkeit des Geräts — die verschiebt den
+Punkt auch **längs** der Strecke und wirkt damit unmittelbar auf den Kilometer. Festgehalten steht
+deshalb `vom Standort ±X m` in der Marke, mit X als Summe beider Anteile: die obere Schranke, denn
+ohne die Richtung des Ortungsfehlers zu kennen geht es nicht enger.
+
+**Ohne Netz, sonst wäre es nicht brauchbar.** Eine Abfrage im Sekundentakt kommt nicht in Frage,
+also kommen die Steine aus der geladenen Strecke oder aus den mitgelieferten Kacheln. Letzteres ist
+neu: Die Kacheln lieferten bisher nur Startwerte für die ORM-Abfrage, ihre Kilometerpunkte tragen
+keine Streckennummer. Zugeordnet werden sie über die Lage — was auf dem Gleis dieser Strecke steht,
+gehört zu ihr, dieselbe Prüfung, mit der die App auch die Startwerte sortiert. Der Gleisweg zwischen
+zwei Steinen bleibt außerdem gepuffert: Der Standort wandert, das Steinpaar um ihn herum bleibt
+minutenlang dasselbe, und der Aufbau des Wegegraphen ist die teuerste Rechnung der App.
+
+Gemessen im Testbrowser an der gemeldeten Stelle 49,520913 / 10,274394: 4 ms für die Frage, welche
+Strecke hier liegt, 3 ms für die Steine aus der Kachel, 10 ms für das ganze Ergebnis samt Weg über
+die 9-km-Lücke zwischen km 87,2 und 96,2 — bei jeder weiteren Meldung unter einer Millisekunde,
+weil dann alles gepuffert ist. Die Kacheln lagen dabei schon entschlüsselt im Speicher; der erste
+Griff in eine neue Gegend kostet zusätzlich das Laden der Kachel, wie beim Antippen auch. Herausgekommen ist km 91,527, entlang des Gleises gerechnet.
+
+**Die Strecke bleibt kleben.** An einem Bahnhof liegen ein halbes Dutzend Nummern in Reichweite,
+und eine Anzeige, die im Gehen zwischen ihnen springt, ist unbrauchbar. Gefunden wird die Strecke
+deshalb einmal und bleibt, solange der Standort in Reichweite ihrer Steine liegt: bis zu 80 m
+querab plus die gemeldete Ortungsgenauigkeit, gedeckelt bei 250 m. Diese Grenze ist hergeleitet und
+nicht nachgemessen — 80 m ist derselbe Umkreis, mit dem die App nach der Strecke unter einem
+gesetzten Punkt sucht, und die Ortungsgenauigkeit muss dazu, weil unter Bäumen oder im Einschnitt
+schnell 30 m gemeldet werden.
+
+Zwei Sparmaßnahmen, damit im Gelände nicht der Akku dafür draufgeht: Unter 5 m Bewegung wird nicht
+neu gerechnet — der Fix wandert im Stand um einige Meter, und eine Zahl, die dabei zappelt, liest
+sich schlechter als eine, die steht. Und solange keine Strecke gefunden ist, wird erst nach 30 m
+Bewegung wieder gesucht, denn diese Frage geht über alle Gleise im Umkreis.
+
+**Wo nichts herauskommt, steht der Grund** statt eines leeren Feldes: „keine Strecke in Reichweite",
+„kein Kilometerpunkt in Reichweite", „Gleisnetz dieser Gegend nicht auf dem Gerät", „außerhalb des
+mitgelieferten Gleisnetzes". Ein Tipp darauf nimmt den bekannten Weg über die Streckensuche — der
+ist ein bewusster Griff und darf deshalb ins Netz gehen.
+
+**Ein Tipp auf die Zahl hält sie fest.** Dann steht der Punkt unten wie jeder andere, mit
+Koordinate, Herkunft, Genauigkeit, Google Maps, Route, Kopieren und Teilen; die Steine der Strecke
+werden dazu nachgeladen. Die Zeile oben läuft daneben weiter.
 
 ### Der Marker gehört aufs Gleis, nicht auf die Sehne
 

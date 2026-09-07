@@ -67,6 +67,19 @@ const UMWEG_GRENZE = 200;
  * Zoomstufe an eine andere Linie springen; 80 m ist derselbe Umkreis, mit dem
  * linesNear nach der Strecke unter dem Punkt sucht. */
 const PUNKT_TOL = 80;
+/* Und für die laufende Anzeige aus dem Standort: Wie weit darf man querab der
+ * Steine stehen, damit noch ein Kilometer angezeigt wird?
+ *
+ * Hergeleitet, nicht nachgemessen: PUNKT_TOL ist der feste Anteil — derselbe
+ * Umkreis, mit dem linesNear nach der Strecke unter einem Punkt sucht. Dazu
+ * kommt die vom Gerät gemeldete Ortungsgenauigkeit, denn unter Bäumen oder im
+ * Einschnitt sind das schnell 30 m, und die sollen die Anzeige nicht ausgehen
+ * lassen. Nach oben gedeckelt, weil ein schlechter Fix sonst eine Strecke
+ * einfängt, an der man gar nicht läuft. */
+const LIVE_TOL_MAX = 250;
+/* Unter dieser Bewegung wird nicht neu gerechnet: Im Stand wandert der Fix um
+ * einige Meter, und die angezeigte Zahl soll dabei stehen bleiben. */
+const LIVE_MIN_WEG = 5;
 /* Wie weit wird nach einer Kilometerangabe gesucht, die der ORM-Abfrage als
  * Startwert dient? Der Wert muss nur grob stimmen — die API liefert danach die
  * Steine ringsum.
@@ -637,6 +650,35 @@ async function aufGleisSetzen(ref, lat, lon, umkreis) {
   return best && best.dist <= umkreis ? best : null;
 }
 
+/** Kilometerpunkte einer Strecke aus den Kacheln, nach Kilometer sortiert.
+ *
+ * Damit kommt die Richtung Position → Kilometer ganz ohne Netz aus: Bisher
+ * lieferten die Kacheln nur Startwerte, die eigentlichen Steine holte danach
+ * die ORM-API. Fürs Antippen ist das richtig — eine Abfrage, unter einer
+ * Sekunde, und die API führt Betreiber und Steinkennung mit. Die laufende
+ * Anzeige aus dem Standort kann sich das nicht leisten.
+ *
+ * Die Punkte in der Kachel tragen keine Streckennummer; zugeordnet werden sie
+ * wie in netzLinesNear über die Lage: Was auf dem Gleis dieser Strecke steht,
+ * gehört zu ihr. */
+async function netzSteine(ref, lat, lon, umkreis) {
+  const dLat = umkreis / 110540;
+  const dLon = umkreis / (111320 * Math.max(0.2, Math.cos(lat * Math.PI / 180)));
+  const bereich = await netzBereich(lat - dLat, lon - dLon, lat + dLat, lon + dLon);
+  if (!bereich) return null;
+
+  const gleise = bereich.wege.filter(w =>
+    w.ref && String(w.ref).split(';').some(t => t.trim() === String(ref)));
+  if (!gleise.length) return null;
+
+  const steine = [];
+  for (const p of bereich.punkte) {
+    if (!gleise.some(w => distToWay(p.lat, p.lon, w.geometry) < 25)) continue;
+    steine.push({ lat: p.lat, lon: p.lon, km: p.km, ref: String(ref) });
+  }
+  return steine.sort((a, b) => a.km - b.km);
+}
+
 /** Alles Mitgelieferte in einem Rechteck — oder null, wenn dort nichts erzeugt wurde. */
 async function netzBereich(sued, west, nord, ost) {
   const ix = await netzBereit();
@@ -990,7 +1032,43 @@ async function netzHatVerlauf(A, B) {
   return !!(b && b.wege.length);
 }
 
+/* Der Gleisweg zwischen zwei Steinen bleibt liegen.
+ *
+ * Bisher wurde er je Tipp einmal gebraucht, da fiel der Aufbau des Graphen
+ * nicht auf. Die laufende Anzeige aus dem Standort fragt ihn dagegen bei jeder
+ * Meldung des Geräts — im Sekundentakt —, während der Standort wandert und das
+ * Steinpaar um ihn herum minutenlang dasselbe bleibt. Ohne Puffer wäre die
+ * teuerste Rechnung der App in Dauerschleife unterwegs.
+ *
+ * Gescheiterte Versuche werden nicht gemerkt: Das ist meist der überlastete
+ * Fremddienst und nicht die Geometrie, und der darf beim nächsten Mal wieder
+ * gefragt werden. Der Rückfall auf „nichts gefunden" ohne Netz (nurLokal)
+ * scheitert nicht, sondern liefert null — das bleibt gepuffert. */
+const WEG_PUFFER_MAX = 24;
+const wegPuffer = new Map();      // Schlüssel → Versprechen auf den Weg
+
 async function gleisWegZwischen(A, B, nurLokal = false) {
+  const schluessel = `${nurLokal ? 'l' : 'o'}|${A.km}|${A.lat.toFixed(6)},${A.lon.toFixed(6)}` +
+    `|${B.km}|${B.lat.toFixed(6)},${B.lon.toFixed(6)}`;
+
+  let versprechen = wegPuffer.get(schluessel);
+  if (versprechen) {
+    // Wieder ans Ende der Map, damit der älteste Eintrag zuerst weicht
+    wegPuffer.delete(schluessel);
+    wegPuffer.set(schluessel, versprechen);
+    return versprechen;
+  }
+
+  versprechen = wegSuchen(A, B, nurLokal);
+  wegPuffer.set(schluessel, versprechen);
+  versprechen.catch(() => {
+    if (wegPuffer.get(schluessel) === versprechen) wegPuffer.delete(schluessel);
+  });
+  while (wegPuffer.size > WEG_PUFFER_MAX) wegPuffer.delete(wegPuffer.keys().next().value);
+  return versprechen;
+}
+
+async function wegSuchen(A, B, nurLokal) {
   const pad = verlaufRand(A, B);
   const lokal = await netzBereich(
     Math.min(A.lat, B.lat) - pad, Math.min(A.lon, B.lon) - pad,
@@ -1227,8 +1305,11 @@ async function kmExtrapoliert(ref, lat, lon, sorted) {
  * Wie genau das ist, steht bei GLEIS_ERR. Unterhalb von MAX_DRAW_GAP_KM wird
  * weiter die Sehne genommen: Dort ist sie gemessen genauso gut und kostet keine
  * Overpass-Abfrage von Sekunden. */
-async function kmEntlangGleis(ref, lat, lon, nurLokal = false) {
-  const e = lineCache.get(ref);
+async function kmEntlangGleis(ref, lat, lon, nurLokal = false, steine = null) {
+  /* steine: eine fertige Steinliste anstelle der geladenen Strecke. Die
+   * laufende Anzeige aus dem Standort rechnet auf Steinen aus den Kacheln, für
+   * die es keinen Eintrag in lineCache gibt. */
+  const e = steine ? { sorted: steine } : lineCache.get(ref);
   if (!e || e.sorted.length < 2) return null;
 
   const grob = projectOnLine(e.sorted, lat, lon, MAX_GLEIS_GAP_KM);
@@ -1336,7 +1417,7 @@ let recent = [];   // nicht "history" nennen — das ist window.history
 /* ============================ Karte ============================ */
 
 let map, baseOsm, baseSat, baseDop, baseRelief, ormLayer, parzLayer;
-let msLayer, trackLayer, pointLayer, meLayer, merkLayer;
+let msLayer, trackLayer, pointLayer, meLayer, merkLayer, liveLayer;
 /* Hintergründe schließen sich aus, Auflagen nicht — als Verzeichnis gehalten,
  * damit ein weiterer Dienst nur ein Eintrag und ein Knopf ist. */
 let baseLayers = {};
@@ -1418,6 +1499,7 @@ function initMap() {
   msLayer = L.layerGroup().addTo(map);
   trackLayer = L.layerGroup().addTo(map);
   pointLayer = L.layerGroup().addTo(map);
+  liveLayer = L.layerGroup().addTo(map);      // Lot vom Standort auf die Trasse
   meLayer = L.layerGroup().addTo(map);
   merkLayer = L.layerGroup().addTo(map);
 
@@ -3234,7 +3316,7 @@ function onMapClick(ev) {
  * Der Kilometer bleibt der aus der Sehne gelesene; verschoben wird nur, wo der
  * Punkt gezeichnet und weitergereicht wird. Angezeigt heißt das: „deine Stelle,
  * auf die Schiene gesetzt" und nicht „der Ort von Kilometer X". */
-async function kartePunkt(ref, hit, lat, lon, operator) {
+async function kartePunkt(ref, hit, lat, lon, operator, steine = null) {
   /* Liegt der Verlauf mitgeliefert vor, entscheidet der Umweg, welcher
    * Kilometer gilt. Ein einzelner Bogen schadet der Sehne nicht — entlang
    * eines Kreisbogens hebt sich die Abweichung zur Mitte hin auf. Erst wenn
@@ -3249,7 +3331,7 @@ async function kartePunkt(ref, hit, lat, lon, operator) {
    * Ab 200 m Umweg zu wechseln räumt die Ausreißer weg: Fälle über 100 m
    * Fehler gehen von 7 auf 1, das 99. Perzentil von 144 auf 106 m, bei
    * unverändertem Median. */
-  const weg = await kmEntlangGleis(ref, lat, lon, true);
+  const weg = await kmEntlangGleis(ref, lat, lon, true, steine);
   if (weg && weg.wegLaenge - weg.chord > UMWEG_GRENZE) {
     const { pfad, ...punkt } = weg;
     punkt.umweg = weg.wegLaenge - weg.chord;
@@ -3683,7 +3765,14 @@ function qualityTag(p) {
     return { cls: p.err.worst > 50 ? 'warn' : 'ok', text: `interpoliert ±${nfM.format(p.err.worst)} m` };
   }
   // Beim Tippen kommt die Unsicherheit des eigenen Fingers hinzu — bleibt orange
-  if (p.quality === 'karte') return { cls: 'warn', text: `von der Karte ±${nfM.format(tapError(p.chord || 0).worst)} m` };
+  if (p.quality === 'karte') {
+    /* Aus dem Standort festgehalten tritt die Ortungsungenauigkeit an die Stelle
+     * des Fingers. Sie verschiebt den Punkt auch längs der Strecke, wirkt also
+     * unmittelbar auf den Kilometer; beide Anteile addiert ist die obere
+     * Schranke — ohne die Richtung des Fehlers zu kennen, geht es nicht enger. */
+    const err = tapError(p.chord || 0).worst + (p.standort ? Math.round(p.standort.genau) : 0);
+    return { cls: 'warn', text: `${p.standort ? 'vom Standort' : 'von der Karte'} ±${nfM.format(err)} m` };
+  }
   if (p.quality === 'betriebsstelle') return { cls: 'ok', text: 'Betriebsstelle' };
   const d = Math.abs(p.delta || 0);
   return { cls: d > 1 ? 'bad' : 'warn', text: `${fmtKm(d)} km daneben` };
@@ -3772,7 +3861,10 @@ function renderBottom() {
     }
   } else if (p.quality === 'karte') {
     const err = tapError(p.chord || 0);
-    detail = `Aus dem Kartentipp abgeleitet, zwischen den Steinen bei km ${fmtKm(p.between[0])} und ` +
+    detail = (p.standort
+        ? `Aus dem verfolgten Standort abgeleitet, gemeldet auf ±${nfM.format(p.standort.genau)} m genau`
+        : `Aus dem Kartentipp abgeleitet`) +
+      `, zwischen den Steinen bei km ${fmtKm(p.between[0])} und ` +
       `${fmtKm(p.between[1])}, ${nfM.format(p.chord || 0)} m auseinander` +
       (p.offset > 15 ? `, ${nfM.format(p.offset)} m querab des Gleises` : '') + `. ` +
       (p.aufGleis > 5
@@ -4029,6 +4121,7 @@ function ortStop(nachricht) {
   if (ortWatch != null) navigator.geolocation.clearWatch(ortWatch);
   ortWatch = null;
   ortLetzt = null;
+  liveVergessen();
   if (meLayer) meLayer.clearLayers();
   const btn = $('#mapLocBtn');
   if (btn) btn.classList.remove('busy', 'is-on');
@@ -4070,7 +4163,11 @@ function ortNeu(pos) {
     toast(`Standort auf ±${nfM.format(accuracy || 0)} m genau.`);
   }
 
+  /* Die Zeile steht sofort mit dem, was zuletzt bekannt war; der Kilometer
+   * rechnet nebenher und zeichnet sie ein zweites Mal. Auf ihn zu warten hieße,
+   * den Standortpunkt später zu setzen. */
   liveLeiste();
+  liveKmRechnen();
 }
 
 /** Rechtweisende Peilung von hier zu einem Ziel, in Grad. */
@@ -4100,16 +4197,253 @@ function ortNaechstesObjekt() {
   return best;
 }
 
-/* Schmale Zeile unter der Suchleiste, nur solange verfolgt wird: Genauigkeit,
- * Abstand zum letzten Messpunkt und das nächste KML-Objekt mit Richtungspfeil.
- * Der Pfeil rechnet die Kartendrehung heraus, zeigt also auf dem Schirm dorthin,
- * wo das Ziel wirklich liegt. */
+/* ---- Kilometer live aus dem Standort ----
+ *
+ * Wer an der Strecke läuft, will den Kilometer sehen, ohne dafür zu tippen:
+ * hinschauen und wissen, wo man ist.
+ *
+ * Gerechnet wird dasselbe wie bei einem gesetzten Punkt — der Standort wird auf
+ * den Zug der Kilometersteine gelotet und der Kilometer aus der Sehne gelesen,
+ * bei weiten Steinabständen am mitgelieferten Gleisverlauf entlang. Es ist
+ * buchstäblich dieselbe Funktion (kartePunkt), also gilt auch dieselbe
+ * nachgemessene Genauigkeit; hinzu kommt allein die Ortungsungenauigkeit des
+ * Geräts, und die steht in derselben Zeile.
+ *
+ * Zwei Dinge sind hier anders als beim Tippen:
+ *
+ * Erstens läuft es bei jeder Meldung des Geräts, also im Sekundentakt. Deshalb
+ * geht davon nichts ins Netz: Die Steine kommen aus der geladenen Strecke oder
+ * aus den Kacheln (netzSteine), der Gleisweg zwischen zwei Steinen bleibt
+ * gepuffert. Wo beides nichts hergibt, steht in der Zeile der Grund, und ein
+ * Tipp darauf nimmt den bekannten Weg über kmAnStelle — der darf dann fragen.
+ *
+ * Zweitens steht die Strecke nicht fest. An einem Bahnhof liegen ein halbes
+ * Dutzend Nummern in Reichweite, und eine Anzeige, die im Gehen zwischen ihnen
+ * springt, ist im Gelände unbrauchbar. Deshalb bleibt die einmal gefundene
+ * Strecke kleben, solange der Standort in Reichweite ihrer Steine liegt. */
+
+/* Wonach nicht bei jeder Meldung neu gesucht wird: Welche Strecke hier liegt,
+ * kostet ein Vielfaches einer Projektion — netzLinesNear geht über alle Gleise
+ * im Umkreis. Solange keine Strecke gefunden ist, wird die Frage erst nach
+ * 30 m Bewegung erneut gestellt: zu Fuß ein halbes Dutzend Schritte, im Auto
+ * eine Sekunde. */
+const LIVE_SUCH_WEG = 30;
+
+let liveKm = null;        // { ref, km, punkt } oder null
+let liveGrund = '';       // kurz, warum gerade kein Kilometer steht
+let liveRef = '';         // die klebende Strecke
+let liveSteine = null;    // { ref, lat, lon, umkreis, sorted } aus den Kacheln
+let liveVon = null;       // Standort und Strecke der letzten Rechnung
+let liveSuchVon = null;   // wo zuletzt nach einer Strecke gesucht wurde
+let liveRechnet = false;
+
+function liveVergessen() {
+  liveKm = null;
+  liveGrund = '';
+  liveRef = '';
+  liveSteine = null;
+  liveVon = null;
+  liveSuchVon = null;
+  if (liveLayer) liveLayer.clearLayers();
+}
+
+/** Reicht diese Steinliste bis an den Standort heran? */
+function liveReicht(sorted, lat, lon, tol) {
+  const hit = sorted && sorted.length > 1 && projectOnLine(sorted, lat, lon, MAX_GLEIS_GAP_KM);
+  return !!hit && hit.dist <= tol;
+}
+
+/** Steine für die laufende Rechnung — erst die geladene Strecke, dann die Kachel. */
+async function liveSteineFuer(ref, lat, lon, tol) {
+  /* Die ORM-Daten haben Vorrang, solange sie hier reichen: Sie stecken schon im
+   * Speicher, sind für die gesuchte Strecke gefiltert und führen den Betreiber
+   * mit. Reichen sie nicht bis hierher, wird nicht nachgeladen — das wäre eine
+   * Netzabfrage im Sekundentakt. */
+  const e = lineCache.get(ref);
+  if (e && liveReicht(e.sorted, lat, lon, tol)) return e.sorted;
+
+  /* Aus der Kachel gesammelte Steine bleiben liegen, bis man aus ihrem halben
+   * Umkreis hinausgelaufen ist: Die Zuordnung Punkt → Strecke geht über die
+   * Lage auf dem Gleis und ist die teuerste Rechnung in dieser Kette.
+   *
+   * Reicht die gepufferte Liste nicht bis hierher, wird trotzdem noch einmal
+   * weiter gegriffen — es sei denn, sie ist schon die weite: Dann bringt ein
+   * neuer Versuch dasselbe Ergebnis und kostet nur Rechenzeit je Meldung. */
+  if (liveSteine && liveSteine.ref === ref &&
+      haversine(lat, lon, liveSteine.lat, liveSteine.lon) < liveSteine.umkreis / 2 &&
+      (liveSteine.umkreis >= SEED_RADIUS || liveReicht(liveSteine.sorted, lat, lon, tol))) {
+    return liveSteine.sorted;
+  }
+
+  /* Erst eng, dann weit. 4 km reichen fast immer und halten die Zuordnung
+   * billig; der weite Griff lohnt nur, wo kein Steinpaar den Standort
+   * einschließt — an Strecke 5321 etwa liegt zwischen km 87,2 und 96,2 keiner.
+   *
+   * Gefragt ist dabei nicht „irgendein Paar", sondern eines, das den Standort
+   * auch erreicht: Bei 49,520913 / 10,274394 liegen im engen Umkreis nur die
+   * Steine bei km 96,2 und 96,4 am anderen Ende, 4 km entfernt. Die bilden ein
+   * gültiges Paar — und mit ihm wäre die Suche vorzeitig zufrieden gewesen,
+   * während der Standort in der Lücke davor liegt. */
+  let sorted = null;
+  for (const umkreis of [4000, SEED_RADIUS]) {
+    const s = await netzSteine(ref, lat, lon, umkreis);
+    if (!s || s.length < 2) continue;
+    sorted = s;
+    liveSteine = { ref, lat, lon, umkreis, sorted: s };
+    if (liveReicht(s, lat, lon, tol)) break;
+  }
+  return sorted;
+}
+
+/** Kilometer an dieser Stelle auf dieser Strecke — ohne Netz, oder null. */
+async function liveTreffer(ref, lat, lon, tol) {
+  const sorted = await liveSteineFuer(ref, lat, lon, tol);
+  if (!sorted) return null;
+
+  const hit = projectOnLine(sorted, lat, lon);
+  if (hit && hit.dist <= tol) {
+    return kartePunkt(ref, hit, lat, lon, sorted[0].operator, sorted);
+  }
+
+  /* Kein Paar innerhalb der Zeichengrenze, vielleicht aber eines über eine
+   * weite Lücke — dann entscheidet der echte Verlauf, genau wie in useLineAt. */
+  const weit = await kmEntlangGleis(ref, lat, lon, true, sorted);
+  if (weit && weit.offset <= tol) {
+    const { pfad, ...punkt } = weit;      // der Verlauf gehört nicht in den Zustand
+    return punkt;
+  }
+  return null;
+}
+
+async function liveKmRechnen() {
+  if (!ortLetzt || liveRechnet) return;
+  const { lat, lon, genau } = ortLetzt;
+
+  /* Im Stand nicht neu rechnen: Der Fix wandert um einige Meter, und eine Zahl,
+   * die dabei zappelt, liest sich schlechter als eine, die steht. Ein Wechsel
+   * der Strecke oben zählt aber als Grund. */
+  if (liveVon && (liveKm || liveGrund) && liveVon.ref === view.ref &&
+      haversine(lat, lon, liveVon.lat, liveVon.lon) < LIVE_MIN_WEG) return;
+
+  liveRechnet = true;
+  const tol = Math.min(LIVE_TOL_MAX, PUNKT_TOL + genau);
+  try {
+    const versucht = new Set();
+    let punkt = null, ref = '';
+
+    // Erst die klebende Strecke, dann die oben eingegebene
+    for (const kandidat of [liveRef, view.ref]) {
+      if (!kandidat || versucht.has(kandidat)) continue;
+      versucht.add(kandidat);
+      punkt = await liveTreffer(kandidat, lat, lon, tol);
+      if (punkt) { ref = kandidat; break; }
+    }
+
+    if (!punkt) {
+      if (liveSuchVon && haversine(lat, lon, liveSuchVon.lat, liveSuchVon.lon) < LIVE_SUCH_WEG) return;
+      liveSuchVon = { lat, lon };
+
+      const nah = await netzLinesNear(lat, lon);      // aus der Kachel, ohne Netz
+      if (!nah) {
+        const lage = await netzLage(lat, lon);
+        liveKm = null;
+        liveRef = '';
+        liveGrund = lage === 'draussen' ? 'außerhalb des mitgelieferten Gleisnetzes'
+          : lage === 'fehlt' ? 'Gleisnetz dieser Gegend nicht auf dem Gerät'
+          : lage === 'aus' ? 'kein mitgeliefertes Gleisnetz'
+          : 'Gleisnetz hier unvollständig';
+        return;
+      }
+      for (const k of nah.refs) {
+        if (versucht.has(k.ref)) continue;
+        versucht.add(k.ref);
+        punkt = await liveTreffer(k.ref, lat, lon, tol);
+        if (punkt) { ref = k.ref; break; }
+      }
+      if (!punkt) {
+        liveKm = null;
+        liveRef = '';
+        liveGrund = nah.refs.length ? 'kein Kilometerpunkt in Reichweite' : 'keine Strecke in Reichweite';
+        return;
+      }
+    }
+
+    liveRef = ref;
+    liveSuchVon = null;          // geht sie wieder verloren, gleich neu suchen
+    liveGrund = '';
+    punkt.standort = { genau };
+    liveKm = { ref, km: punkt.km, punkt };
+  } catch (err) {
+    /* Eine laufende Anzeige darf nicht mit einer Fehlermeldung im Weg stehen,
+     * und die Ursache ist hier immer dieselbe Klasse: fehlende Daten. */
+    liveKm = null;
+    liveGrund = 'Kilometer hier nicht bestimmbar';
+  } finally {
+    liveRechnet = false;
+    liveVon = { lat, lon, ref: view.ref };
+    liveKmZeichnen();
+    liveLeiste();
+  }
+}
+
+/* Der Standpunkt und die Stelle, an der er auf der Trasse landet, sind zwei
+ * verschiedene Punkte. Das Lot dazwischen macht die Anzeige nachprüfbar: Man
+ * sieht, auf welches Gleis gerechnet wurde und wie weit querab man steht. */
+function liveKmZeichnen() {
+  if (!liveLayer) return;
+  liveLayer.clearLayers();
+  if (!liveKm || !ortLetzt) return;
+
+  const p = liveKm.punkt;
+  L.polyline([[ortLetzt.lat, ortLetzt.lon], [p.lat, p.lon]], {
+    color: '#2f81f7', weight: 2, opacity: 0.8, dashArray: '3 5', interactive: false
+  }).addTo(liveLayer);
+  L.circleMarker([p.lat, p.lon], {
+    radius: 5, color: '#fff', weight: 2, fillColor: '#2f81f7', fillOpacity: 1, interactive: false
+  }).addTo(liveLayer);
+}
+
+/** Den laufenden Kilometer festhalten — von da an dieselbe Anzeige wie bei einem Tipp. */
+function liveKmFest() {
+  if (!ortLetzt) return;
+  if (!liveKm) {
+    // Ohne laufende Antwort der bekannte Weg, der auch fragen darf
+    kmAnStelle(ortLetzt.lat, ortLetzt.lon, PUNKT_TOL);
+    return;
+  }
+  applyPoint(liveKm.ref, liveKm.km, { ...liveKm.punkt });
+  /* Und die Steine dazu holen, wie nach einem Tipp: Gerechnet wurde womöglich
+   * auf Kachelpunkten, und die zeichnet drawMilestones nicht. Ein bewusster
+   * Griff darf das kosten — die laufende Anzeige dürfte es nicht. */
+  coverage(liveKm.ref, liveKm.km).then(drawMilestones).catch(() => { });
+  toast(`km ${fmtKm(liveKm.km)} festgehalten — die Anzeige unten bleibt stehen.`);
+}
+
+/* Schmale Zeile unter der Suchleiste, nur solange verfolgt wird: der Kilometer
+ * an der eigenen Stelle, die Ortungsgenauigkeit, der Abstand zum letzten
+ * Messpunkt und das nächste KML-Objekt mit Richtungspfeil. Der Pfeil rechnet
+ * die Kartendrehung heraus, zeigt also auf dem Schirm dorthin, wo das Ziel
+ * wirklich liegt. */
 function liveLeiste() {
   const el = $('#live');
   if (!el) return;
   if (!ortLetzt) { el.hidden = true; el.innerHTML = ''; updateBH(); return; }
 
-  const stuecke = [`<span class="tag">±${nfM.format(ortLetzt.genau)} m</span>`];
+  /* Der Kilometer steht vorn: Er ist der Grund, warum die Zeile da ist. Ein
+   * Tipp darauf hält ihn fest, damit Koordinate, Herkunft, Google Maps und
+   * Teilen zur Verfügung stehen wie bei jedem anderen Punkt. */
+  const stuecke = [];
+  if (liveKm) {
+    const quer = liveKm.punkt.offset > 20 ? ` · ${nfM.format(liveKm.punkt.offset)} m querab` : '';
+    stuecke.push(`<button type="button" class="live-teil live-km" data-livekm ` +
+      `title="Kilometer festhalten"><b>km ${esc(fmtKm(liveKm.km))}</b>` +
+      `<small>Strecke ${esc(liveKm.ref)}${esc(quer)}</small></button>`);
+  } else {
+    stuecke.push(`<button type="button" class="live-teil live-km live-km-aus" data-livekm ` +
+      `title="Kilometer hier bestimmen"><b>km —</b>` +
+      `<small>${esc(liveGrund || 'wird gerechnet …')}</small></button>`);
+  }
+  stuecke.push(`<span class="tag">±${nfM.format(ortLetzt.genau)} m</span>`);
 
   if (messModus && messPunkte.length) {
     const p = messPunkte[messPunkte.length - 1];
@@ -4128,6 +4462,8 @@ function liveLeiste() {
 
   el.innerHTML = stuecke.join('');
   el.hidden = false;
+  const knopf = el.querySelector('[data-livekm]');
+  if (knopf) knopf.addEventListener('click', liveKmFest);
   updateBH();
 }
 

@@ -253,6 +253,18 @@ body {
 .live-ziel { margin-left: auto; }
 .live-ziel svg { width: 17px; height: 17px; flex: none; fill: var(--accent); align-self: center; }
 
+/* Der Kilometer an der eigenen Stelle ist ein Knopf -- ein Tipp haelt ihn fest.
+   Er soll aber wie die uebrigen Stuecke der Zeile aussehen und nicht wie eine
+   Schaltflaeche, deshalb erbt er Schrift und Farbe und bringt nur die
+   groessere Zahl mit. */
+.live-km {
+  appearance: none; -webkit-appearance: none;
+  background: none; border: 0; padding: 0; margin: 0;
+  color: inherit; font: inherit; text-align: left; cursor: pointer;
+}
+.live-km b { font-size: 1.02rem; letter-spacing: -.01em; }
+.live-km-aus b { color: var(--muted-2); font-weight: 600; }
+
 /* Fadenkreuz in der Kartenmitte beim Messen */
 .mittekreuz {
   position: fixed; left: 50%; top: 50%;
