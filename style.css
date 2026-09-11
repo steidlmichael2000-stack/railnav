@@ -182,7 +182,7 @@ body {
 
 .search { display: flex; align-items: stretch; gap: 2px; padding: 6px; }
 
-.field { flex: 1 1 0; min-width: 0; padding: 4px 10px 5px; border-radius: 11px; }
+.field { position: relative; flex: 1 1 0; min-width: 0; padding: 4px 10px 5px; border-radius: 11px; }
 .field:focus-within { background: var(--panel-2); }
 .field-ref { flex-grow: 1.15; }
 .field + .field { box-shadow: inset 1px 0 0 var(--line); }
@@ -201,6 +201,18 @@ body {
   color: var(--text);
 }
 .field input::placeholder { color: var(--muted-2); font-weight: 500; opacity: 1; }
+
+/* Trenner anhängen — sitzt im Feld rechts und erscheint erst, wenn dort etwas
+   steht. Der Zahlenblock des Handys kennt weder & noch Leertaste. */
+.kmplus {
+  position: absolute; right: 4px; top: 50%; transform: translateY(-50%);
+  width: 26px; height: 26px; padding: 0;
+  display: grid; place-items: center;
+  border-radius: 8px; border: 1px solid var(--line);
+  background: var(--panel-2); color: var(--muted);
+  font: inherit; font-size: .92rem; font-weight: 700; line-height: 1; cursor: pointer;
+}
+.kmplus:active { color: var(--accent); border-color: var(--accent); }
 
 .go, .more {
   flex: none;
@@ -673,6 +685,19 @@ html[data-theme="light"] .bb-actions .maps { color: #fff; }
 .pick small { display: block; font-size: .68rem; font-weight: 500; opacity: .75; }
 .pick button.is-on { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
 
+/* Mehrere Achspunkte: die Zeile, die zwischen ihnen umschaltet */
+.bb-reihe {
+  display: flex; gap: 6px; flex-wrap: wrap;
+  margin: 0 0 8px; padding-right: 34px;      /* Platz für das Schließkreuz */
+}
+.bb-chip {
+  padding: 4px 10px; border-radius: 9px;
+  border: 1px solid var(--line); background: var(--panel-2);
+  color: var(--muted); font: inherit; font-size: .84rem; font-weight: 650;
+  font-variant-numeric: tabular-nums; cursor: pointer; white-space: nowrap;
+}
+.bb-chip.is-on { border-color: var(--accent); color: var(--accent-ink); background: var(--accent); }
+
 /* ---------- Marker ---------- */
 
 .ms {
@@ -698,6 +723,11 @@ html[data-theme="light"] .bb-actions .maps { color: #fff; }
 }
 .pin.warn { background: var(--warn); }
 .pin.bad { background: var(--bad); }
+/* Die übrigen Punkte einer Reihe: derselbe Pin, nur zurückgenommen, damit
+   erkennbar bleibt, welchen die untere Leiste gerade beschreibt. Die Größe
+   bleibt gleich — ein kleinerer Pin sitzt im selben Rahmen versetzt und zeigt
+   dann ein paar Pixel neben die Stelle. */
+.pin.neben { opacity: .7; }
 
 /* Kilometer am Pin — steht neben der Spitze, damit er auch ohne die untere
    Leiste und auf einem Bildschirmfoto ablesbar bleibt. */
@@ -712,6 +742,7 @@ html[data-theme="light"] .bb-actions .maps { color: #fff; }
 }
 .pin-km.warn { background: var(--warn); color: #1a1206; }   /* Orange trägt keine weiße Schrift */
 .pin-km.bad { background: var(--bad); }
+.pin-km.neben { opacity: .82; }
 
 .me-dot {
   width: 16px; height: 16px; border-radius: 50%;

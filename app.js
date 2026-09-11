@@ -1427,6 +1427,18 @@ let prefs = {
 };
 let recent = [];   // nicht "history" nennen — das ist window.history
 
+/* Mehrere Achspunkte auf einmal: Im Feld stehen dann mehrere Kilometer, durch
+ * & oder Leerzeichen getrennt. Alle stehen gleichberechtigt auf der Karte;
+ * view.point ist der, den die untere Leiste gerade beschreibt. Bei einem
+ * einzelnen Punkt bleibt die Reihe leer und alles läuft wie bisher. */
+let reihe = [];          // [{ km, punkt, pfad }]
+let reiheAktiv = 0;
+let reiheFehler = [];    // Kilometer der Reihe, die nicht zu bestimmen waren
+const REIHE_MAX = 20;    // ein verrutschtes Einfügen soll nicht 500 Abfragen auslösen
+
+/** Kilometer aus einem Feldinhalt herauslösen — & oder Leerzeichen trennen. */
+const kmTokens = s => String(s).split(/[&;\s]+/).filter(Boolean);
+
 /* ============================ Karte ============================ */
 
 let map, baseOsm, baseSat, baseDop, baseRelief, ormLayer, parzLayer;
@@ -2874,26 +2886,64 @@ function drawMilestones() {
 function drawPoint() {
   pointLayer.clearLayers();
   pointMarker = null;
-  if (!view.point) return;
 
-  const q = view.point.quality;
+  if (reihe.length > 1) {
+    reihe.forEach((r, i) => {
+      const m = pinZeichnen(r.punkt, r.km, i === reiheAktiv, i);
+      if (i === reiheAktiv) pointMarker = m;
+    });
+    return;
+  }
+  if (!view.point) return;
+  pointMarker = pinZeichnen(view.point, view.km, true, -1);
+}
+
+/** Ein Pin samt Kilometerschild. `idx` ≥ 0 heißt: Teil einer Reihe und
+ *  anklickbar, um die untere Leiste auf diesen Punkt umzustellen. */
+function pinZeichnen(p, km, aktiv, idx) {
+  const q = p.quality;
   const cls = q === 'naechster' ? 'bad' : q === 'karte' ? 'warn' : '';
-  pointMarker = L.marker([view.point.lat, view.point.lon], {
-    icon: L.divIcon({ className: '', html: `<div class="pin ${cls}"></div>`, iconSize: [26, 26], iconAnchor: [13, 24] }),
-    zIndexOffset: 1000
+  const m = L.marker([p.lat, p.lon], {
+    icon: L.divIcon({
+      className: '', iconSize: [26, 26], iconAnchor: [13, 24],
+      html: `<div class="pin ${cls}${aktiv ? '' : ' neben'}"></div>`
+    }),
+    interactive: idx >= 0, keyboard: false,
+    zIndexOffset: aktiv ? 1000 : 900
   }).addTo(pointLayer);
+
+  if (idx >= 0) m.on('click', ev => { L.DomEvent.stopPropagation(ev); reiheWaehlen(idx); });
 
   /* Der Kilometer steht auch unten in der Leiste — die verdeckt aber gerade beim
    * Weiterschieben der Karte den Blick, und auf einem Bildschirmfoto fehlt sonst
-   * die Angabe zum Pin. Deshalb hängt sie zusätzlich am Pin selbst. */
-  if (view.km != null) {
-    L.marker([view.point.lat, view.point.lon], {
-      interactive: false, keyboard: false, zIndexOffset: 1000,
+   * die Angabe zum Pin. Bei mehreren Punkten ist sie ohnehin die einzige Art,
+   * sie auseinanderzuhalten. */
+  if (km != null) {
+    L.marker([p.lat, p.lon], {
+      interactive: false, keyboard: false, zIndexOffset: aktiv ? 1000 : 900,
       icon: L.divIcon({
         className: '', iconSize: null, iconAnchor: [-16, 15],
-        html: `<span class="pin-km ${cls}">km ${fmtKm(view.km)}</span>`
+        html: `<span class="pin-km ${cls}${aktiv ? '' : ' neben'}">km ${fmtKm(km)}</span>`
       })
     }).addTo(pointLayer);
+  }
+  return m;
+}
+
+/** Einen Punkt der Reihe in die untere Leiste holen — ohne neu zu rechnen. */
+function reiheWaehlen(i) {
+  const r = reihe[i];
+  if (!r) return;
+  reiheAktiv = i;
+  view.km = r.km;
+  view.point = r.punkt;
+  gleiswegZuletzt = r.pfad || null;
+  zeichneGleiswegNeu();
+  drawPoint();
+  renderBottom();
+  updateHash();
+  if (!map.getBounds().pad(-0.12).contains([r.punkt.lat, r.punkt.lon])) {
+    map.panTo([r.punkt.lat, r.punkt.lon]);
   }
 }
 
@@ -3763,6 +3813,9 @@ function showPicker(refs, seeds, lat, lon) {
 /* ============================ Punkt setzen & anzeigen ============================ */
 
 function applyPoint(ref, km, result) {
+  reihe = [];          // ein einzelner Punkt löst die Reihe ab
+  reiheAktiv = 0;
+  reiheFehler = [];
   view.ref = ref;
   view.km = km;
   view.point = result;
@@ -3771,6 +3824,7 @@ function applyPoint(ref, km, result) {
 
   $('#ref').value = ref;
   $('#km').value = fmtKm(km);
+  kmPlusZeigen();
 
   drawPoint();
   drawMilestones();
@@ -3929,8 +3983,21 @@ function renderBottom() {
     }
   }
 
+  /* Bei mehreren Achspunkten steht oben eine Zeile mit allen Kilometern. Sie
+   * schaltet die Beschreibung darunter um — gerechnet ist längst alles. */
+  const umschalt = reihe.length > 1
+    ? `<div class="bb-reihe">` + reihe.map((r, i) =>
+        `<button type="button" class="bb-chip${i === reiheAktiv ? ' is-on' : ''}" data-reihe="${i}">` +
+        `km ${esc(fmtKm(r.km))}</button>`).join('') + `</div>`
+    : '';
+  const reiheAus = reiheFehler.length
+    ? `<p class="bb-note">Nicht bestimmbar: ${esc(reiheFehler.join(' · '))}</p>`
+    : '';
+
   b.hidden = false;
   b.innerHTML = `
+    ${umschalt}
+    ${reiheAus}
     <div class="bb-head">
       <p class="bb-title">${esc(title)}</p>
       <span class="tag ${tag.cls}">${esc(tag.text)}</span>
@@ -3960,6 +4027,9 @@ function renderBottom() {
 function bindBottom() {
   const zu = $('#bbClose');
   if (zu) zu.addEventListener('click', closeBottom);
+
+  document.querySelectorAll('#bottom [data-reihe]').forEach(btn =>
+    btn.addEventListener('click', () => reiheWaehlen(Number(btn.dataset.reihe))));
 
   const copy = $('#copyBtn');
   if (copy) copy.addEventListener('click', async () => {
@@ -4000,6 +4070,9 @@ function showError(msg) {
 function closeBottom() {
   view.point = null;
   pointMarker = null;
+  reihe = [];
+  reiheAktiv = 0;
+  reiheFehler = [];
   if (pointLayer) pointLayer.clearLayers();
   gleiswegZuletzt = null;
   if (trackLayer) trackLayer.clearLayers();
@@ -4036,6 +4109,7 @@ async function search() {
   try {
     if (!kmRaw) {
       // Nur Strecke: Anfang der Strecke zeigen, damit man sich orientieren kann
+      reihe = []; reiheAktiv = 0; reiheFehler = [];
       view.ref = ref;
       await coverage(ref, 0);
       const e = lineCache.get(ref);
@@ -4048,9 +4122,13 @@ async function search() {
       return;
     }
 
+    const tokens = kmTokens(kmRaw);
+    if (tokens.length > 1) { await searchReihe(ref, tokens); return; }
+
     const km = toKm(kmRaw);
     if (!isFinite(km)) { toast('Kilometer nicht lesbar — z. B. 12,5 oder 14+250.'); return; }
 
+    reihe = []; reiheAktiv = 0; reiheFehler = [];
     view.ref = ref;
     const res = await gleisGenau(ref, km, await resolvePoint(ref, km));
     applyPoint(ref, km, res);
@@ -4061,6 +4139,84 @@ async function search() {
   } finally {
     setBusy(false);
   }
+}
+
+/* Mehrere Achspunkte auf einen Schlag — im Feld durch & oder Leerzeichen
+ * getrennt. Das ist der Fall aus der Praxis: Aus einer Liste von Achspunkten
+ * sollen alle auf einmal auf die Karte, nicht einer nach dem anderen von Hand.
+ *
+ * Gerechnet wird nacheinander mit genau derselben Funktion wie bei einem
+ * einzelnen Punkt — die Steine der Strecke stehen nach dem ersten Griff im
+ * Speicher, die weiteren kosten dann kaum noch etwas. Ein Punkt, der nicht
+ * geht, wirft nicht die ganze Reihe weg; er wird darunter benannt. */
+async function searchReihe(ref, tokens) {
+  if (tokens.length > REIHE_MAX) {
+    toast(`Höchstens ${REIHE_MAX} Kilometer auf einmal — es waren ${tokens.length}.`);
+    return;
+  }
+
+  const kms = tokens.map(toKm);
+  const unlesbar = tokens.filter((t, i) => !isFinite(kms[i]));
+  if (unlesbar.length) {
+    toast(`Nicht lesbar: ${unlesbar.join(' ')} — z. B. 12,5 oder 14+250.`);
+    return;
+  }
+
+  reihe = [];
+  reiheAktiv = 0;
+  reiheFehler = [];
+  view.ref = ref;
+  view.point = null;
+  pointLayer.clearLayers();
+
+  const fehler = [];
+  for (let i = 0; i < kms.length; i++) {
+    showStatus(`Rechnet ${i + 1} von ${kms.length} — km ${fmtKm(kms[i])} …`);
+    try {
+      const res = await gleisGenau(ref, kms[i], await resolvePoint(ref, kms[i]));
+      const { pfad, ...punkt } = res;
+      reihe.push({ km: kms[i], punkt, pfad: pfad || null });
+    } catch (err) {
+      fehler.push(`km ${fmtKm(kms[i])}: ${err.message || 'nicht bestimmbar'}`);
+    }
+  }
+
+  if (!reihe.length) {
+    showError(`Kein einziger der ${kms.length} Kilometer war zu bestimmen. ${fehler[0] || ''}`);
+    return;
+  }
+
+  reiheFehler = fehler;
+  reiheAktiv = 0;
+  view.km = reihe[0].km;
+  view.point = reihe[0].punkt;
+  gleiswegZuletzt = reihe[0].pfad || null;
+  zeichneGleiswegNeu();
+  drawPoint();
+  drawMilestones();
+  renderBottom();
+  pushRecent(ref, reihe[0].km);
+  updateHash();
+
+  /* Die untere Leiste wächst mit der Zahl der Punkte — ihre Höhe hier abfragen,
+   * sonst verschwindet der erste Pin hinter ihr. */
+  const pts = reihe.map(r => [r.punkt.lat, r.punkt.lon]);
+  if (reihe.length > 1) {
+    const unten = Math.min(300, ($('#bottom').offsetHeight || 140) + 30);
+    map.fitBounds(L.latLngBounds(pts), { paddingTopLeft: [40, 100], paddingBottomRight: [40, unten], maxZoom: 16 });
+  } else {
+    map.setView(pts[0], Math.max(map.getZoom(), 15));
+  }
+  if (fehler.length) toast(`${fehler.length} von ${kms.length} nicht bestimmbar — siehe unten.`);
+}
+
+/* Der Trennerknopf steht nur da, wenn im Feld schon etwas steht — vorher wäre
+ * er sinnlos und würde bloß den Platz für die Zahl wegnehmen. */
+function kmPlusZeigen() {
+  const el = $('#km'), k = $('#kmPlus');
+  if (!el || !k) return;
+  k.hidden = !el.value.trim();
+  el.style.paddingRight = k.hidden ? '' : '26px';
 }
 
 function fitLine(e) {
@@ -4624,7 +4780,8 @@ function syncButtons() {
 function updateHash() {
   const p = new URLSearchParams();
   if (view.ref) p.set('r', view.ref);
-  if (view.km != null) p.set('k', String(view.km));
+  if (reihe.length > 1) p.set('k', reihe.map(r => fmtKm(r.km)).join(' '));
+  else if (view.km != null) p.set('k', String(view.km));
   const hash = '#' + p.toString();
   try { window.history.replaceState(null, '', hash); } catch { location.hash = hash; }
 }
@@ -4637,15 +4794,20 @@ function readHash() {
   if (!r) return false;
   $('#ref').value = r;
   const k = p.get('k');
-  if (k != null && k !== '') $('#km').value = fmtKm(toKm(k));
+  if (k != null && k !== '') {
+    const werte = kmTokens(k).map(toKm);
+    $('#km').value = werte.length && werte.every(isFinite) ? werte.map(fmtKm).join(' & ') : k;
+  }
   return true;
 }
 
 async function share() {
   const url = location.origin + location.pathname + location.hash;
-  const title = view.point && view.km != null
-    ? `Strecke ${view.ref} km ${fmtKm(view.km)}`
-    : 'Railnav';
+  const title = reihe.length > 1
+    ? `Strecke ${view.ref} · ${reihe.length} Kilometer`
+    : view.point && view.km != null
+      ? `Strecke ${view.ref} km ${fmtKm(view.km)}`
+      : 'Railnav';
   if (navigator.share) {
     try { await navigator.share({ title, text: title, url }); return; }
     catch { /* abgebrochen — dann kopieren */ }
@@ -4671,6 +4833,15 @@ function bind() {
     if (ev.key === 'Enter') { ev.preventDefault(); search(); ev.target.blur(); }
   });
   on('#km', 'focus', closeSuggest);
+  on('#km', 'input', kmPlusZeigen);
+  on('#kmPlus', 'click', () => {
+    const el = $('#km');
+    el.value = el.value.replace(/[&;\s]+$/, '') + ' & ';
+    el.focus();
+    el.setSelectionRange(el.value.length, el.value.length);
+    kmPlusZeigen();
+  });
+  kmPlusZeigen();
 
   on('#facQ', 'keydown', ev => { if (ev.key === 'Enter') { ev.preventDefault(); runFacility(); } });
   on('#facGo', 'click', runFacility);
@@ -4803,6 +4974,7 @@ function boot() {
 
   if (readHash()) search();
   else if (recent[0]) $('#ref').value = recent[0].ref;
+  kmPlusZeigen();
 
   if ('serviceWorker' in navigator && window.isSecureContext) {
     navigator.serviceWorker.register('sw.js').catch(() => { /* Offlinebetrieb ist optional */ });

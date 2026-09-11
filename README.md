@@ -12,6 +12,10 @@ am Rechner und lässt sich als App auf den Startbildschirm legen.
 
 - **Beide Richtungen.** Strecke + km → Position, und ein langer Druck auf die Karte →
   Strecke + km.
+- **Mehrere Achspunkte auf einmal.** Im Kilometerfeld dürfen mehrere Angaben stehen, getrennt
+  durch `&` oder ein Leerzeichen — `1,304 & 2,5 & 14+250`. Alle stehen danach mit ihrem Kilometer
+  auf der Karte, und die Zeile in der unteren Leiste geht sie durch. Der Link nimmt die ganze
+  Liste mit.
 - **Der eigene Kilometer läuft mit.** Ein Tipp auf `km ?` in der Zeile unter der Suchleiste wirft
   die Rechnung an; von da an steht dort bei jeder neuen Ortung, bei welchem Kilometer welcher
   Strecke man gerade steht — ohne Netz und ohne weiteres Zutun. Wer an der Strecke läuft, schaut
@@ -96,6 +100,30 @@ sieht. Weiter entfernte Punkte stehen weiter zur Auswahl, nur nicht automatisch.
 
 **Zoomknöpfe gibt es nicht** — am Rechner zoomt das Mausrad, am Gerät zwei Finger oder ein
 Doppeltipp. Der Platz rechts unten gehört den drei eigenen Knöpfen: Messen, Ablesen, Standort.
+
+### Mehrere Achspunkte in einem Durchgang
+
+Aus einer Liste von Achspunkten sollen alle auf einmal auf die Karte, nicht einer nach dem
+anderen von Hand. Das Kilometerfeld nimmt deshalb mehrere Angaben an, getrennt durch `&`,
+Semikolon oder schlicht ein Leerzeichen; jede darf in beiden Schreibweisen stehen, also
+`2,5` ebenso wie `2+500`. Höchstens 20 auf einmal — ein verrutschtes Einfügen soll nicht
+hunderte Abfragen auslösen.
+
+Gerechnet wird nacheinander mit genau derselben Funktion wie bei einem einzelnen Punkt, die
+Genauigkeitsangaben unten gelten also unverändert. Teuer ist davon nur der erste Punkt: Danach
+stehen die Steine der Strecke im Speicher, und auch der Gleisweg zwischen zwei Steinen bleibt
+gepuffert. Ein Punkt, der sich nicht bestimmen lässt, wirft die übrigen nicht weg — er wird
+unter der Leiste benannt.
+
+Auf der Karte trägt jeder Pin seinen Kilometer, sonst wären sie nicht auseinanderzuhalten. Die
+untere Leiste beschreibt immer einen davon; umgeschaltet wird über die Kilometerzeile darüber
+oder durch Antippen eines Pins, ohne neu zu rechnen. Der geteilte Link enthält alle Kilometer
+und stellt die Reihe beim Öffnen wieder her.
+
+**Der Trennerknopf.** Der Zahlenblock des Handys hat weder `&` noch Leertaste, und das Feld auf
+eine Volltastatur umzustellen würde den häufigen Fall — eine einzelne Zahl tippen — verschlechtern.
+Deshalb steht rechts im Feld ein kleiner `&`-Knopf, sobald dort etwas drinsteht; er hängt den
+Trenner an und lässt die Tastatur, wie sie ist.
 
 ## Wie genau ist das?
 

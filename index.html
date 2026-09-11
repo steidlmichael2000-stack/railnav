@@ -73,7 +73,11 @@
       <div class="field field-km">
         <label for="km">Kilometer</label>
         <input id="km" type="text" inputmode="decimal" placeholder="12,5" autocomplete="off"
-               spellcheck="false" enterkeyhint="search">
+               spellcheck="false" enterkeyhint="search" aria-describedby="kmHelp">
+        <!-- Der Zahlenblock des Handys hat weder & noch Leertaste — deshalb hängt
+             dieser Knopf den Trenner an, statt die Tastatur umzuschalten. -->
+        <button id="kmPlus" class="kmplus" type="button" hidden
+                aria-label="Weiteren Kilometer anhängen">&amp;</button>
       </div>
       <button id="go" class="go" type="button" aria-label="Suchen">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h14M12 5l7 7-7 7"/></svg>
@@ -83,6 +87,7 @@
       </button>
     </div>
     <p id="refHelp" class="sr-only">Nur die Strecke eingeben zeigt den ganzen Streckenverlauf. Ein Klick auf die Karte setzt den Kilometer.</p>
+    <p id="kmHelp" class="sr-only">Mehrere Kilometer durch kaufmännisches Und oder Leerzeichen trennen — sie werden alle auf einmal gerechnet.</p>
     <div id="suggest" class="suggest" role="listbox" aria-label="Zuletzt gesucht" hidden></div>
     <div id="progress" class="progress" hidden></div>
   </div>
@@ -213,6 +218,12 @@
 
     <details class="sheet-sec" data-sec="hinweise">
       <summary><h2>Hinweise</h2></summary>
+      <p class="fine"><strong>Mehrere Achspunkte auf einmal.</strong> Im Kilometerfeld dürfen mehrere
+      Angaben stehen, getrennt durch <code>&amp;</code> oder ein Leerzeichen — etwa
+      <code>1,304 &amp; 2,5 &amp; 14+250</code>. Alle werden gerechnet, stehen mit ihrem Kilometer auf
+      der Karte und lassen sich über die Zeile in der unteren Leiste oder durch Antippen des Pins
+      durchgehen. Auf dem Handy hängt der Knopf <code>&amp;</code> neben dem Feld den Trenner an,
+      weil der Zahlenblock keinen hat. Höchstens 20 auf einmal.</p>
       <p class="fine"><strong>Keine amtliche Quelle.</strong> Die Positionen stammen aus in
       OpenStreetMap erfassten Kilometersteinen und taugen zur groben Verortung — nicht für
       Vermessung, Disposition oder sicherheitsrelevante Entscheidungen. Zwischen zwei Steinen
