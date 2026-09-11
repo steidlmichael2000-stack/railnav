@@ -12,13 +12,17 @@ am Rechner und lässt sich als App auf den Startbildschirm legen.
 
 - **Beide Richtungen.** Strecke + km → Position, und ein langer Druck auf die Karte →
   Strecke + km.
-- **Der eigene Kilometer läuft mit.** Solange der Standort verfolgt wird, steht in der Zeile unter
-  der Suchleiste, bei welchem Kilometer welcher Strecke man gerade steht — ohne Zutun, ohne Netz und
-  bei jeder neuen Ortung. Wer an der Strecke läuft, schaut also nur hin. Ein Tipp auf die Zahl hält
-  sie fest.
+- **Der eigene Kilometer läuft mit.** Ein Tipp auf `km ?` in der Zeile unter der Suchleiste wirft
+  die Rechnung an; von da an steht dort bei jeder neuen Ortung, bei welchem Kilometer welcher
+  Strecke man gerade steht — ohne Netz und ohne weiteres Zutun. Wer an der Strecke läuft, schaut
+  also nur hin. Ein Tipp auf die Zahl hält sie fest. Der Standortknopf allein rechnet nichts: Er
+  zeigt, wo man steht, mehr nicht.
 - **Kilometersteine sind sichtbar.** Alle erfassten Steine der Strecke stehen beschriftet auf der
   Karte, verbunden zu einer Linie. Man sieht also, worauf sich die Angabe stützt — und kann einen
-  Stein direkt antippen, statt zu interpolieren.
+  Stein direkt antippen, statt zu interpolieren. Am gefundenen Punkt selbst steht der Kilometer
+  neben dem Pin, damit er auch ohne die untere Leiste und auf einem Bildschirmfoto ablesbar ist.
+  Die beiden Linien, die die Rechnung belegen — der grüne Gleisweg und die blaue Verbindung durch
+  die Steine —, lassen sich unter *Karte* abschalten, wenn sie im Weg sind; die Steine bleiben.
 - **Gemessene Genauigkeitsangabe.** Zu jedem Punkt steht dabei, wie weit er danebenliegen kann —
   nicht geschätzt, sondern an 1474 Steintripeln nachgemessen (siehe unten).
 - **Exakt auf dem Gleis.** Stehen die Steine weit auseinander, wird entlang des tatsächlichen
@@ -36,7 +40,7 @@ am Rechner und lässt sich als App auf den Startbildschirm legen.
   Punkt bleibt von allein aktuell. Die Karte fährt dabei nur beim ersten Fix hin und bewegt sich
   danach **nie von selbst**: Beim Zielen und Messen würde eine nachziehende Karte gegen die eigene
   Hand arbeiten. Ein Tipp auf den Knopf holt die Karte zum Standort zurück, der nächste beendet die
-  Verfolgung. Darüber erscheint eine Zeile mit dem **eigenen Kilometer**, der Ortungsgenauigkeit, dem
+  Verfolgung. Darüber erscheint eine Zeile mit dem Knopf für den **eigenen Kilometer**, der Ortungsgenauigkeit, dem
   Abstand zum letzten Messpunkt und **Entfernung samt Richtungspfeil zum nächsten Objekt der
   geladenen KML-Dateien** — damit lassen sich Punkte im Gelände ablaufen.
 - **Messen** — Punkte auf der Karte antippen, die Luftlinie steht als Maßzahl an jedem Abschnitt
@@ -267,6 +271,12 @@ Strecke läuft, statt dafür jedes Mal einen Punkt zu setzen. Solange die Stando
 steht der Kilometer deshalb in der Zeile unter der Suchleiste und rechnet sich bei jeder Meldung
 des Geräts neu; auf der Karte zeigt ein gestricheltes Lot vom Standortpunkt auf die Stelle, an der
 er auf dem Gleis landet.
+
+**Angeworfen wird sie von Hand.** Der Standortknopf zeigt nur die eigene Stelle; die Zeile bringt
+dann `km ?` als Knopf mit, und erst der schaltet das Mitrechnen ein. Vorher lief es mit der
+Verfolgung automatisch an, und das heißt: Wer bloß sehen will, wo er steht, löst eine Kette von
+Kachelgriffen und notfalls Overpass-Abfragen aus, die im Sekundentakt weiterläuft. Jede neue
+Verfolgung fängt wieder ohne Rechnung an — der Schalter merkt sich nichts.
 
 **Gerechnet wird nichts Neues.** Es ist dieselbe Funktion wie bei einem gesetzten Punkt: Standort
 auf den Zug der Kilometersteine loten, Kilometer aus der Sehne lesen, und wo die Sehne über 200 m

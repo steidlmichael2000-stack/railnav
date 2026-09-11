@@ -114,11 +114,19 @@
         <button class="seg-btn" type="button" id="ormBtn">Bahn-Layer</button>
         <button class="seg-btn" type="button" id="parzBtn">Parzellen</button>
       </div>
+      <div class="seg" role="group" aria-label="Rechenhilfen" style="margin-top:7px">
+        <button class="seg-btn" type="button" id="wegLinieBtn">Gleisweg</button>
+        <button class="seg-btn" type="button" id="steinLinieBtn">Steinlinie</button>
+      </div>
       <label class="slider-row" for="baseOpacity">Hintergrund
         <input id="baseOpacity" type="range" min="0" max="100" step="5" value="100">
         <span id="baseOpacityVal" class="slider-val">100&thinsp;%</span>
       </label>
       <p class="fine">Ganz nach links heruntergezogen bleibt nur der Bahn- bzw. WMS-Layer stehen.</p>
+      <p class="fine"><strong>Gleisweg</strong> ist die grüne Linie: der Verlauf zwischen den beiden
+      Steinen, an dem gerechnet wurde. <strong>Steinlinie</strong> ist die dünne blaue Verbindung durch
+      die Kilometersteine, die zeigt, welcher Strang gemeint ist. Beide belegen die Rechnung und lassen
+      sich hier abschalten, wenn sie die Karte verdecken — die Steine selbst bleiben stehen.</p>
       <p class="fine"><strong>DOP20</strong> ist das amtliche Orthophoto der Bayerischen
       Vermessungsverwaltung mit 20 cm Bodenauflösung, wesentlich feiner als das weltweite
       <em>Luftbild</em> von Esri. <strong>Relief</strong> ist das Schräglicht aus dem

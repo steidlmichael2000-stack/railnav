@@ -264,6 +264,12 @@ body {
 }
 .live-km b { font-size: 1.02rem; letter-spacing: -.01em; }
 .live-km-aus b { color: var(--muted-2); font-weight: 600; }
+/* Der Knopf, der die laufende Rechnung erst anwirft — er soll nach Knopf
+   aussehen und nicht nach fehlender Angabe. */
+.live-km-frag { padding: 2px 8px; border-radius: 9px;
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  background: color-mix(in srgb, var(--accent) 13%, transparent); }
+.live-km-frag b { color: var(--accent); }
 
 /* Fadenkreuz in der Kartenmitte beim Messen */
 .mittekreuz {
@@ -692,6 +698,20 @@ html[data-theme="light"] .bb-actions .maps { color: #fff; }
 }
 .pin.warn { background: var(--warn); }
 .pin.bad { background: var(--bad); }
+
+/* Kilometer am Pin — steht neben der Spitze, damit er auch ohne die untere
+   Leiste und auf einem Bildschirmfoto ablesbar bleibt. */
+.pin-km {
+  display: block; padding: 2px 6px; border-radius: 8px;
+  background: var(--accent); color: var(--accent-ink);
+  font-size: .72rem; font-weight: 700; line-height: 1.3;
+  white-space: nowrap; pointer-events: none;
+  font-variant-numeric: tabular-nums;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, .4);
+  border: 1.5px solid rgba(255, 255, 255, .85);
+}
+.pin-km.warn { background: var(--warn); color: #1a1206; }   /* Orange trägt keine weiße Schrift */
+.pin-km.bad { background: var(--bad); }
 
 .me-dot {
   width: 16px; height: 16px; border-radius: 50%;

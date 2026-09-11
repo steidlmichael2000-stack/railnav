@@ -1002,10 +1002,22 @@ function projectOnPath(path, lat, lon) {
   return best;
 }
 
-/** Den gefundenen Verlauf über die Karte legen — er belegt, worauf gerechnet wurde. */
+/** Den gefundenen Verlauf über die Karte legen — er belegt, worauf gerechnet wurde.
+ *
+ * Wer ihn nicht sehen will, schaltet ihn im Menü ab; der Weg bleibt dann trotzdem
+ * gemerkt, damit der Schalter ihn ohne neue Rechnung zurückholt. */
+let gleiswegZuletzt = null;
+
 function zeichneGleisweg(path) {
+  gleiswegZuletzt = path && path.length ? path : null;
+  zeichneGleiswegNeu();
+}
+
+function zeichneGleiswegNeu() {
+  if (!trackLayer) return;
   trackLayer.clearLayers();
-  L.polyline(path, { color: '#22c55e', weight: 4, opacity: 0.9, interactive: false }).addTo(trackLayer);
+  if (!gleiswegZuletzt || prefs.wegLinie === false) return;
+  L.polyline(gleiswegZuletzt, { color: '#22c55e', weight: 4, opacity: 0.9, interactive: false }).addTo(trackLayer);
 }
 
 /* Der Gleisweg zwischen zwei Steinen — beide Richtungen brauchen genau das:
@@ -1410,6 +1422,7 @@ const view = {
 
 let prefs = {
   theme: 'auto', base: 'osm', orm: true, baseOpacity: 100,
+  wegLinie: true, steinLinie: true,      // die beiden Rechenhilfen auf der Karte
   wms: { url: '', layers: '', opacity: 75, on: false }   // nur Adresse und Layer, nie Zugangsdaten
 };
 let recent = [];   // nicht "history" nennen — das ist window.history
@@ -2825,7 +2838,7 @@ function drawMilestones() {
     const a = e.sorted[i - 1], b = e.sorted[i];
     if (segmentOk(a, b, MAX_DRAW_GAP_KM)) path.push([[a.lat, a.lon], [b.lat, b.lon]]);
   }
-  if (path.length) {
+  if (path.length && prefs.steinLinie !== false) {
     L.polyline(path, { color: '#4b93e6', weight: 3, opacity: 0.45, interactive: false }).addTo(msLayer);
   }
 
@@ -2869,6 +2882,19 @@ function drawPoint() {
     icon: L.divIcon({ className: '', html: `<div class="pin ${cls}"></div>`, iconSize: [26, 26], iconAnchor: [13, 24] }),
     zIndexOffset: 1000
   }).addTo(pointLayer);
+
+  /* Der Kilometer steht auch unten in der Leiste — die verdeckt aber gerade beim
+   * Weiterschieben der Karte den Blick, und auf einem Bildschirmfoto fehlt sonst
+   * die Angabe zum Pin. Deshalb hängt sie zusätzlich am Pin selbst. */
+  if (view.km != null) {
+    L.marker([view.point.lat, view.point.lon], {
+      interactive: false, keyboard: false, zIndexOffset: 1000,
+      icon: L.divIcon({
+        className: '', iconSize: null, iconAnchor: [-16, 15],
+        html: `<span class="pin-km ${cls}">km ${fmtKm(view.km)}</span>`
+      })
+    }).addTo(pointLayer);
+  }
 }
 
 /* ---- Punkt von Hand setzen ----
@@ -3740,7 +3766,8 @@ function applyPoint(ref, km, result) {
   view.ref = ref;
   view.km = km;
   view.point = result;
-  if (trackLayer) trackLayer.clearLayers();   // Gleis-Overlay gehört zum alten Punkt
+  gleiswegZuletzt = null;                    // Gleis-Overlay gehört zum alten Punkt
+  if (trackLayer) trackLayer.clearLayers();
 
   $('#ref').value = ref;
   $('#km').value = fmtKm(km);
@@ -3974,6 +4001,7 @@ function closeBottom() {
   view.point = null;
   pointMarker = null;
   if (pointLayer) pointLayer.clearLayers();
+  gleiswegZuletzt = null;
   if (trackLayer) trackLayer.clearLayers();
   $('#bottom').hidden = true;
   $('#bottom').innerHTML = '';
@@ -4109,7 +4137,8 @@ function locate() {
   closeSheet();
   const btn = $('#mapLocBtn');
   if (btn) btn.classList.add('busy');
-  toast('Standort wird verfolgt — der Punkt bleibt von allein aktuell.');
+  liveKmAn = false;      // jede neue Verfolgung fängt ohne Rechnung an
+  toast('Standort wird verfolgt. Den Kilometer bestimmt der Knopf in der Zeile oben.');
 
   ortWatch = navigator.geolocation.watchPosition(ortNeu, ortFehler, {
     enableHighAccuracy: true, maximumAge: 2000, timeout: 25000
@@ -4167,7 +4196,7 @@ function ortNeu(pos) {
    * rechnet nebenher und zeichnet sie ein zweites Mal. Auf ihn zu warten hieße,
    * den Standortpunkt später zu setzen. */
   liveLeiste();
-  liveKmRechnen();
+  if (liveKmAn) liveKmRechnen();
 }
 
 /** Rechtweisende Peilung von hier zu einem Ziel, in Grad. */
@@ -4236,8 +4265,14 @@ let liveSteine = null;    // { ref, lat, lon, umkreis, sorted } aus den Kacheln
 let liveVon = null;       // Standort und Strecke der letzten Rechnung
 let liveSuchVon = null;   // wo zuletzt nach einer Strecke gesucht wurde
 let liveRechnet = false;
+/* Der Standortknopf zeigt nur noch, wo man steht. Gerechnet wird erst, wenn
+ * man es in der Zeile darüber verlangt — die Rechnung fragt bei jedem Schritt
+ * Kacheln und notfalls Overpass, und das soll niemand ungefragt auslösen.
+ * Beim Beenden der Verfolgung fällt der Schalter wieder zurück. */
+let liveKmAn = false;
 
 function liveVergessen() {
+  liveKmAn = false;
   liveKm = null;
   liveGrund = '';
   liveRef = '';
@@ -4316,7 +4351,7 @@ async function liveTreffer(ref, lat, lon, tol) {
 }
 
 async function liveKmRechnen() {
-  if (!ortLetzt || liveRechnet) return;
+  if (!ortLetzt || liveRechnet || !liveKmAn) return;
   const { lat, lon, genau } = ortLetzt;
 
   /* Im Stand nicht neu rechnen: Der Fix wandert um einige Meter, und eine Zahl,
@@ -4403,6 +4438,16 @@ function liveKmZeichnen() {
   }).addTo(liveLayer);
 }
 
+/** Die laufende Rechnung anwerfen — der bewusste Griff, den der Standortknopf
+ *  nicht mehr mitmacht. Von hier an rechnet jede Standortmeldung mit. */
+function liveKmStart() {
+  if (!ortLetzt) return;
+  liveKmAn = true;
+  liveGrund = 'wird gerechnet …';
+  liveLeiste();
+  liveKmRechnen();
+}
+
 /** Den laufenden Kilometer festhalten — von da an dieselbe Anzeige wie bei einem Tipp. */
 function liveKmFest() {
   if (!ortLetzt) return;
@@ -4438,10 +4483,14 @@ function liveLeiste() {
     stuecke.push(`<button type="button" class="live-teil live-km" data-livekm ` +
       `title="Kilometer festhalten"><b>km ${esc(fmtKm(liveKm.km))}</b>` +
       `<small>Strecke ${esc(liveKm.ref)}${esc(quer)}</small></button>`);
-  } else {
+  } else if (liveKmAn) {
     stuecke.push(`<button type="button" class="live-teil live-km live-km-aus" data-livekm ` +
       `title="Kilometer hier bestimmen"><b>km —</b>` +
       `<small>${esc(liveGrund || 'wird gerechnet …')}</small></button>`);
+  } else {
+    stuecke.push(`<button type="button" class="live-teil live-km live-km-frag" data-livean ` +
+      `title="Kilometer zum Standort bestimmen"><b>km ?</b>` +
+      `<small>antippen — dann läuft er mit</small></button>`);
   }
   stuecke.push(`<span class="tag">±${nfM.format(ortLetzt.genau)} m</span>`);
 
@@ -4464,6 +4513,8 @@ function liveLeiste() {
   el.hidden = false;
   const knopf = el.querySelector('[data-livekm]');
   if (knopf) knopf.addEventListener('click', liveKmFest);
+  const an = el.querySelector('[data-livean]');
+  if (an) an.addEventListener('click', liveKmStart);
   updateBH();
 }
 
@@ -4554,6 +4605,12 @@ function syncButtons() {
     mb.setAttribute('aria-pressed', messModus ? 'true' : 'false');
   }
 
+  const wl = $('#wegLinieBtn');
+  if (wl) wl.classList.toggle('is-on', prefs.wegLinie !== false);
+
+  const sl = $('#steinLinieBtn');
+  if (sl) sl.classList.toggle('is-on', prefs.steinLinie !== false);
+
   const kn = $('#kmlNamenBtn');
   if (kn) kn.classList.toggle('is-on', prefs.kmlNamen !== false);
 
@@ -4620,6 +4677,18 @@ function bind() {
 
   document.querySelectorAll('[data-base]').forEach(b => b.addEventListener('click', () => setBase(b.dataset.base)));
   on('#ormBtn', 'click', () => toggleOverlay('orm'));
+  on('#wegLinieBtn', 'click', () => {
+    prefs.wegLinie = prefs.wegLinie === false;
+    saveStore();
+    syncButtons();
+    zeichneGleiswegNeu();
+  });
+  on('#steinLinieBtn', 'click', () => {
+    prefs.steinLinie = prefs.steinLinie === false;
+    saveStore();
+    syncButtons();
+    drawMilestones();
+  });
   on('#parzBtn', 'click', () => toggleOverlay('parz'));
   document.querySelectorAll('[data-theme]').forEach(b => b.addEventListener('click', () => {
     prefs.theme = b.dataset.theme;
