@@ -209,23 +209,60 @@ Achse.
 **Gelaufen wird geradeaus, nicht kürzest.** Dijkstra sucht sich an einer Verzweigung irgendeinen
 Ast und landet auf dem Nachbargleis; eine Strecke folgt aber dem geraden Durchgang — an einer
 Weiche biegt das durchgehende Hauptgleis nicht ab. An 148 übersprungenen Außensteinen gemessen
-macht das den Unterschied zwischen 84 m und 38 m im Median.
+machte das den Unterschied zwischen 84 m und 38 m im Median. (Diese beiden Zahlen stammen aus der
+ersten Messung, also von vor dem weiter unten beschriebenen Fehler im Lauf; der Vergleich war für
+beide Verfahren derselbe.)
 
 **Und der Lauf prüft sich selbst.** Mit demselben Verfahren wird die *bekannte* Strecke zum
 Nachbarstein gelaufen; trifft es dort nicht auf 100 m, wird nicht extrapoliert. Das fängt genau die
 Ausreißer ab:
 
+Nachgemessen über alle 310 mitgelieferten Kacheln: je Strecke der äußerste Stein übersprungen,
+vom nächsten aus hinausgelaufen, mit der wahren Lage verglichen. 3224 Fälle, davon 295
+aussortiert, weil der Vergleichsstein weiter Luftlinie entfernt liegt, als der Weg am Gleis lang
+ist — dieselbe Streckennummer an zwei Orten, da taugt der Vergleichswert nicht. Bleiben 2929:
+
 | | Fälle | Median | 90. Perzentil | schlechtester |
 | --- | --- | --- | --- | --- |
-| ohne Selbstprobe | 148 | 38 m | 249 m | **4333 m** |
-| mit Selbstprobe | 127 | **35 m** | **93 m** | **746 m** |
-| nächstgelegener Stein (bisher) | 148 | 264 m | 881 m | 2762 m |
+| ohne Selbstprobe | 1172 | 14 m | 67 m | 2036 m |
+| mit Selbstprobe | 1073 | **13 m** | **57 m** | **2008 m** |
+| nächstgelegener Stein (ohne all das) | 1073 | 208 m | 989 m | 2934 m |
 
-Besser als der nächstgelegene Stein in 119 von 127 Fällen. Wo die Probe scheitert oder mehr als
-3 km hinausgerechnet werden müssten, bleibt es bei der alten, ehrlichen Warnung.
+Besser als der nächstgelegene Stein in 1026 von 1073 Fällen; über 100 m daneben liegen 26, über
+750 m sieben. Wo die Probe scheitert oder mehr als 3 km hinausgerechnet werden müssten, bleibt es
+bei der alten, ehrlichen Warnung.
+
+Die Selbstprobe trägt seit der Fehlerbehebung weniger als vorher — der Lauf selbst irrt kaum noch,
+und die Ausreißer, die sie früher abfing, entstehen gar nicht erst. Sie bleibt trotzdem: 99 der
+1172 Fälle lehnt sie ab, und das 90. Perzentil sinkt dabei von 67 auf 57 m.
 
 Bei Strecke 5251 km 0,5 heißt das: 1000 m vom Stein bei km 1,5 hinaus, Selbstprobe trifft den
 Nachbarstein auf 2 m, Ergebnis in 131 ms.
+
+#### Der Lauf lief zu weit — und die Probe in die falsche Richtung
+
+Gemeldet an Strecke 5062, km 1,034: Der Punkt stand 510 m südöstlich des Steins bei km 1,2, obwohl
+nur 166 m hinauszurechnen waren — in einem ganz anderen Abschnitt. Dahinter steckten zwei Fehler,
+die sich gegenseitig verdeckt haben.
+
+**Die erste Kante wurde immer ganz gegangen.** Geteilt wurde erst ab der zweiten: Wer 166 m
+hinauslaufen wollte, landete am Ende der ersten Kante, wie lang die auch war. Auf Geraden lässt
+die Vereinfachung auf 5 m Stützpunkte weg — hier waren es 510 m am Stück, und genau so weit lief
+der Punkt hinaus. Nachgeprüft an derselben Stelle: Für 10, 50, 100, 166 und 300 m kam fünfmal
+derselbe Punkt heraus, 510 m weit draußen; erst ab 600 m stimmte es wieder.
+
+**Die Richtung entschied der Abstand statt der Peilung.** Losgehen soll der Lauf *weg* vom zweiten
+Stein, und dafür wurde der Nachbarknoten genommen, der am weitesten von ihm entfernt liegt. Am
+Stein bei km 1,2 geht es zur richtigen Seite aber nur 30 m bis zum nächsten Stützpunkt und zur
+falschen 510 m am Stück — der falsche Knoten lag weiter weg und gewann. Aufgefallen ist das erst,
+als der erste Fehler weg war: Solange der Lauf am Ende der 510-m-Kante stehen blieb, zeigte die
+Selbstprobe zufällig in die richtige Richtung und traf den Nachbarstein auf 1 m. Jetzt vergleicht
+beides die Peilung: Der erste Schritt muss mehr als 90° von der Richtung zum Bezugspunkt abweichen,
+sonst wird nicht gelaufen.
+
+Was das gekostet hat, zeigt dieselbe Messung mit dem alten Lauf: Median 20 statt 13 m, 90.
+Perzentil 137 statt 57 m, und beantwortet wurden 934 statt 1073 Fälle. Auf den 927 Fällen, die
+beide Fassungen annehmen, ist der neue Lauf in 183 besser, in 720 gleich und in 24 schlechter.
 
 **Und in der Gegenrichtung genauso.** Wer jenseits des äußersten Steins auf die Karte tippt, bekam
 weiter „der Punkt liegt 1.015 m vom Gleis entfernt" — die App lotete ihn auf das letzte Steinpaar,

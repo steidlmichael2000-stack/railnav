@@ -458,13 +458,21 @@ const GLEIS_ERR = { typical: 21, worst: 88, sehne: 186, ueber100: 3, faelle: 13 
 
 /* Und jenseits des äußersten Steins, wo es gar kein Paar mehr gibt.
  *
- * Nachgemessen an 148 Außensteinen: den äußersten übersprungen, vom nächsten
- * aus am Gleis entlang hinausgelaufen und mit seiner wahren Lage verglichen.
- * Mit der Selbstprobe (siehe extrapolieren()) bleiben 127 Fälle übrig — Median
- * 35 m, ungünstiges Zehntel 93 m, schlechtester 746 m. Der nächstgelegene
- * Stein, den die App vorher zeigte, lag im Median 264 m daneben. Besser in 119
- * von 127 Fällen. */
-const EXTRA_ERR = { typical: 35, worst: 93, stein: 264, faelle: 148 };
+ * Nachgemessen über alle 310 mitgelieferten Kacheln: je Strecke den äußersten
+ * Stein übersprungen, vom nächsten aus am Gleis entlang hinausgelaufen und mit
+ * seiner wahren Lage verglichen. 3224 Fälle, davon 295 aussortiert, weil der
+ * Vergleichsstein weiter Luftlinie entfernt liegt als der Weg am Gleis lang
+ * ist — dieselbe Streckennummer an zwei Orten, da taugt der Vergleichswert
+ * nicht. Bleiben 2929; mit der Selbstprobe (siehe extrapolieren()) werden
+ * davon 1073 beantwortet: Median 13 m, ungünstiges Zehntel 57 m, 99. Perzentil
+ * 215 m, schlechtester 2008 m — über 750 m liegen 7 der 1073. Der
+ * nächstgelegene Stein, den die App ohne all das zeigen müsste, lag im Median
+ * 208 m daneben; besser ist die Rechnung in 1026 der 1073 Fälle.
+ *
+ * Die Zahlen sind neu: Die alten (Median 35 m, Zehntel 93 m) stammen von vor
+ * dem Fehler, den entlangLaufen() beschreibt — dieselbe Messung mit dem alten
+ * Lauf ergibt heute Median 20 m und Zehntel 137 m. */
+const EXTRA_ERR = { typical: 13, worst: 57, stein: 208, faelle: 2929, beantwortet: 1073 };
 
 /** Nächster Punkt auf dem Streckenzug der Kilometersteine — liefert auch den Kilometer dort.
  *
@@ -1160,27 +1168,34 @@ function entlangLaufen(nodes, startKey, wegVon, strecke) {
   const start = nodes.get(startKey);
   if (!start || !start.adj.length) return null;
 
-  const abstand = k => haversine(nodes.get(k).lat, nodes.get(k).lon, wegVon.lat, wegVon.lon);
+  /* „Weg von wegVon" heißt: in die Gegenrichtung losgehen — und das entscheidet
+   * die Richtung, nicht der Abstand. Verglichen wurden vorher die Abstände der
+   * Nachbarknoten zu wegVon, und daran scheiterte die Selbstprobe an Strecke
+   * 5062: Vom Stein bei km 1,2 geht es zur richtigen Seite nur 30 m bis zum
+   * nächsten Stützpunkt, zur falschen 510 m am Stück. Der 510 m entfernte
+   * Knoten lag damit weiter von wegVon weg als der richtige 30-m-Schritt, und
+   * die Probe lief nach außen statt zum Nachbarstein. */
+  const hin = peilung(start, wegVon);
+  const abweichung = k =>
+    Math.abs(((peilung(start, nodes.get(k)) - hin + 540) % 360) - 180);
   let vorher = startKey;
-  let jetzt = start.adj.map(([k]) => k).reduce((a, b) => abstand(b) > abstand(a) ? b : a);
-  if (abstand(jetzt) < haversine(start.lat, start.lon, wegVon.lat, wegVon.lon)) return null;
+  let jetzt = start.adj.map(([k]) => k).reduce((a, b) => abweichung(b) > abweichung(a) ? b : a);
+  if (abweichung(jetzt) < 90) return null;      // alles führt zu wegVon hin — nicht raten
 
-  let gelaufen = haversine(start.lat, start.lon, nodes.get(jetzt).lat, nodes.get(jetzt).lon);
-  const besucht = new Set([startKey, jetzt]);
-  const pfad = [[start.lat, start.lon], [nodes.get(jetzt).lat, nodes.get(jetzt).lon]];
+  const besucht = new Set([startKey]);
+  const pfad = [[start.lat, start.lon]];
+  let gelaufen = 0;
 
-  while (gelaufen < strecke) {
-    const ein = peilung(nodes.get(vorher), nodes.get(jetzt));
-    const weiter = nodes.get(jetzt).adj
-      .map(([k]) => k).filter(k => k !== vorher && !besucht.has(k));
-    if (!weiter.length) break;
-
-    const kurve = k => Math.abs(((peilung(nodes.get(jetzt), nodes.get(k)) - ein + 540) % 360) - 180);
-    const naechst = weiter.reduce((a, b) => kurve(b) < kurve(a) ? b : a);
-    if (kurve(naechst) > 75) break;                // das ist ein Abzweig, keine Fortsetzung
-
-    const a = nodes.get(jetzt), b = nodes.get(naechst);
+  /* Jede Kante geht durch dieselbe Prüfung — auch die erste. Vorher wurde die
+   * erste ganz gegangen und erst ab der zweiten geteilt. Weil die
+   * mitgelieferten Kacheln auf Geraden über 500 m ohne Stützpunkt auskommen,
+   * landete damit jeder Lauf, der kürzer war als die erste Kante, an deren
+   * Ende statt dort, wo er hingehört. Gemeldet an Strecke 5062, km 1,034:
+   * 166 m über den Stein bei km 1,2 hinaus gesucht, 510 m weit gezeichnet. */
+  for (;;) {
+    const a = nodes.get(vorher), b = nodes.get(jetzt);
     const d = haversine(a.lat, a.lon, b.lat, b.lon);
+
     if (gelaufen + d >= strecke) {
       const t = d > 0 ? (strecke - gelaufen) / d : 0;
       const ziel = { lat: a.lat + t * (b.lat - a.lat), lon: a.lon + t * (b.lon - a.lon) };
@@ -1188,8 +1203,17 @@ function entlangLaufen(nodes, startKey, wegVon, strecke) {
       return { lat: ziel.lat, lon: ziel.lon, pfad, gelaufen: strecke };
     }
     gelaufen += d;
-    besucht.add(naechst);
+    besucht.add(jetzt);
     pfad.push([b.lat, b.lon]);
+
+    const ein = peilung(a, b);
+    const weiter = b.adj.map(([k]) => k).filter(k => k !== vorher && !besucht.has(k));
+    if (!weiter.length) break;
+
+    const kurve = k => Math.abs(((peilung(b, nodes.get(k)) - ein + 540) % 360) - 180);
+    const naechst = weiter.reduce((x, y) => kurve(y) < kurve(x) ? y : x);
+    if (kurve(naechst) > 75) break;                // das ist ein Abzweig, keine Fortsetzung
+
     vorher = jetzt;
     jetzt = naechst;
   }
@@ -2902,7 +2926,11 @@ function drawPoint() {
  *  anklickbar, um die untere Leiste auf diesen Punkt umzustellen. */
 function pinZeichnen(p, km, aktiv, idx) {
   const q = p.quality;
-  const cls = q === 'naechster' ? 'bad' : q === 'karte' ? 'warn' : '';
+  /* Die Farbe des Pins sagt dasselbe wie die Marke in der Leiste. Ein
+   * hinausgerechneter Punkt sah bisher aus wie ein abgelesener Stein — und
+   * gerade der steht weiter draußen, wo man genau hinsehen sollte. */
+  const cls = q === 'naechster' ? 'bad'
+    : (q === 'karte' || q === 'extrapoliert' || q === 'karte-gleis') ? 'warn' : '';
   const m = L.marker([p.lat, p.lon], {
     icon: L.divIcon({
       className: '', iconSize: [26, 26], iconAnchor: [13, 24],
@@ -3920,9 +3948,10 @@ function renderBottom() {
       `hinausgeht, ist normal — die Kilometrierungslinie beginnt oft später als die Achse. ` +
       `Zur Probe wurde mit demselben Verfahren die bekannte Strecke zum Nachbarstein gelaufen und ` +
       `dieser auf ${nfM.format(p.probe)} m getroffen. An ${EXTRA_ERR.faelle} übersprungenen ` +
-      `Außensteinen nachgemessen lag das Ergebnis typisch ${nfM.format(EXTRA_ERR.typical)} m neben ` +
-      `dem wahren Ort, im ungünstigen Zehntel ${nfM.format(EXTRA_ERR.worst)} m — der nächstgelegene ` +
-      `Stein lag dagegen ${nfM.format(EXTRA_ERR.stein)} m daneben.`;
+      `Außensteinen nachgemessen — beantwortet wurden davon ${EXTRA_ERR.beantwortet} — lag das ` +
+      `Ergebnis typisch ${nfM.format(EXTRA_ERR.typical)} m neben dem wahren Ort, im ungünstigen ` +
+      `Zehntel ${nfM.format(EXTRA_ERR.worst)} m, im schlechtesten Fall 2008 m. Der nächstgelegene ` +
+      `Stein lag dagegen im Median ${nfM.format(EXTRA_ERR.stein)} m daneben.`;
     if (p.hinaus > 1500) {
       warn = `<p class="bb-note">${nfM.format(p.hinaus)} m über den letzten Stein hinausgerechnet. ` +
         `Je weiter hinaus, desto unsicherer.</p>`;
