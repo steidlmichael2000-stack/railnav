@@ -106,6 +106,17 @@ const OVERPASS = [
   'https://overpass.private.coffee/api/interpreter'
 ];
 
+/* Ortssuche. Photon ist genau dafür gebaut — Treffer schon beim Tippen, und
+ * es nimmt einen Punkt entgegen, um in der Nähe zu bevorzugen. Das ist hier
+ * der halbe Nutzen: Wer an der Strecke steht und „Ebing“ tippt, meint das
+ * Ebing vor sich und nicht eines drei Länder weiter.
+ *
+ * Nominatim liegt dahinter, falls Photon nicht antwortet. Es bittet
+ * ausdrücklich darum, nicht für Tippvorschläge benutzt zu werden — deshalb
+ * nur als Ausweichweg und nie während Photon läuft. */
+const PHOTON = 'https://photon.komoot.io/api/';
+const NOMINATIM = 'https://nominatim.openstreetmap.org/search';
+
 /* ============================ Helfer ============================ */
 
 const $ = sel => document.querySelector(sel);
@@ -369,6 +380,121 @@ async function searchFacility(query) {
       uic: d.uic_ref || '',
       operator: d.operator || ''
     }));
+}
+
+/* Freitext → Orte. Antwort ist GeoJSON; `extent` ist die Ausdehnung des
+ * Objekts als [West, Nord, Ost, Süd] und erlaubt, eine Stadt passend zu
+ * zeigen statt mit festem Zoom mitten hinein. */
+async function searchOrt(text, signal) {
+  const c = map.getCenter();
+  const nah = `&lat=${c.lat.toFixed(3)}&lon=${c.lng.toFixed(3)}`;
+  try {
+    const j = await holJson(`${PHOTON}?q=${encodeURIComponent(text)}&lang=de&limit=10${nah}`, signal);
+    /* Bahnobjekte fliegen raus: Nach „Bamberg“ kamen von dort drei weitere
+     * Zeilen namens Bamberg zurück — Bahnhof, zwei Haltestellen —, die alle
+     * dasselbe meinen wie der Treffer, der schon oben in der Liste steht.
+     * Der stammt aus der OpenRailwayMap-Suche und bringt DS100 und UIC mit. */
+    return entdoppeln((j.features || [])
+      .filter(f => (f.properties || {}).osm_key !== 'railway')
+      .map(photonZeile).filter(Boolean));
+  } catch (err) {
+    if (err.name === 'AbortError') throw err;
+    const j = await holJson(
+      `${NOMINATIM}?format=jsonv2&limit=8&accept-language=de&q=${encodeURIComponent(text)}`, signal);
+    return entdoppeln((Array.isArray(j) ? j : []).map(nominatimZeile).filter(Boolean));
+  }
+}
+
+/* Gleicher Name an derselben Stelle (auf rund 100 m genau) kommt nur einmal
+ * in die Liste — Gemeinde und Ortsteil sind dort oft doppelt erfasst. */
+function entdoppeln(liste) {
+  const gesehen = new Set();
+  const raus = [];
+  for (const t of liste) {
+    const schluessel = `${t.name}|${t.lat.toFixed(3)}|${t.lon.toFixed(3)}`;
+    if (gesehen.has(schluessel)) continue;
+    gesehen.add(schluessel);
+    raus.push(t);
+    if (raus.length >= 5) break;
+  }
+  return raus;
+}
+
+/* Eigener Abruf statt getJson: beim Tippen darf nichts 15 Sekunden hängen und
+ * erst recht nicht über einen fremden Proxy laufen. */
+async function holJson(url, signal) {
+  const ctrl = new AbortController();
+  const ab = () => ctrl.abort();
+  if (signal) { if (signal.aborted) ab(); else signal.addEventListener('abort', ab); }
+  const timer = setTimeout(ab, 8000);
+  try {
+    const r = await fetch(url, { signal: ctrl.signal, headers: { Accept: 'application/json' } });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return await r.json();
+  } finally {
+    clearTimeout(timer);
+    if (signal) signal.removeEventListener('abort', ab);
+  }
+}
+
+/* Was für ein Ding ist der Treffer? Ohne das stehen in der Liste mehrere
+ * Zeilen „Bamberg · Bayern“ untereinander, und es ist nicht zu erkennen,
+ * welche die Stadt ist und welche die Straße darin. */
+const ORT_ART = {
+  city: 'Stadt', town: 'Stadt', village: 'Dorf', hamlet: 'Weiler',
+  suburb: 'Ortsteil', quarter: 'Ortsteil', neighbourhood: 'Ortsteil', borough: 'Stadtbezirk',
+  municipality: 'Gemeinde', isolated_dwelling: 'Wohnplatz', farm: 'Hof', locality: 'Örtlichkeit',
+  county: 'Landkreis', state: 'Land', region: 'Region', country: 'Staat'
+};
+
+function ortArt(key, value, hausnummer) {
+  if (hausnummer) return 'Adresse';
+  if (key === 'highway') return 'Straße';
+  if (key === 'place') return ORT_ART[value] || 'Ort';
+  if (key === 'boundary') return ORT_ART[value] || 'Gebiet';
+  if (key === 'waterway' || key === 'natural') return 'Gewässer';
+  return '';
+}
+
+function photonZeile(f) {
+  const p = f.properties || {};
+  const c = (f.geometry || {}).coordinates;
+  if (!Array.isArray(c) || c.length < 2) return null;
+  const strasse = [p.street, p.housenumber].filter(Boolean).join(' ');
+  const name = p.name || strasse || p.city || p.county || p.state;
+  if (!name) return null;
+
+  const teile = [ortArt(p.osm_key, p.osm_value, p.housenumber)];
+  if (strasse && strasse !== name) teile.push(strasse);
+  if (p.postcode) teile.push(p.postcode);
+  for (const s of [p.city, p.county, p.state]) {
+    if (s && s !== name && !teile.includes(s)) teile.push(s);
+  }
+  if (p.country && p.country !== 'Deutschland') teile.push(p.country);
+
+  const e = p.extent;
+  return {
+    art: 'ort', name, sub: teile.filter(Boolean).slice(0, 4).join(' · '),
+    lat: c[1], lon: c[0],
+    bbox: Array.isArray(e) && e.length === 4 ? [[e[3], e[0]], [e[1], e[2]]] : null,
+    typ: p.osm_value || p.type || ''
+  };
+}
+
+function nominatimZeile(d) {
+  const lat = Number(d.lat), lon = Number(d.lon);
+  if (!isFinite(lat) || !isFinite(lon)) return null;
+  const teile = String(d.display_name || '').split(',').map(s => s.trim()).filter(Boolean);
+  const bb = d.boundingbox;   // [Süd, Nord, West, Ost] als Zeichenketten
+  return {
+    art: 'ort',
+    name: d.name || teile[0] || '',
+    sub: [ortArt(d.category, d.type, 0), ...teile.slice(1, 4)].filter(Boolean).join(' · '),
+    lat, lon,
+    bbox: Array.isArray(bb) && bb.length === 4
+      ? [[Number(bb[0]), Number(bb[2])], [Number(bb[1]), Number(bb[3])]] : null,
+    typ: d.type || ''
+  };
 }
 
 /* ============================ Geometrie ============================ */
@@ -3891,6 +4017,7 @@ function qualityTag(p) {
     return { cls: 'warn', text: `${p.standort ? 'vom Standort' : 'von der Karte'} ±${nfM.format(err)} m` };
   }
   if (p.quality === 'betriebsstelle') return { cls: 'ok', text: 'Betriebsstelle' };
+  if (p.quality === 'ort') return { cls: 'ok', text: 'Ort' };
   const d = Math.abs(p.delta || 0);
   return { cls: d > 1 ? 'bad' : 'warn', text: `${fmtKm(d)} km daneben` };
 }
@@ -3914,6 +4041,9 @@ function renderBottom() {
     const kindDe = { station: 'Bahnhof', halt: 'Haltepunkt', yard: 'Bahnhofsteil', junction: 'Abzweigstelle', service_station: 'Betriebsbahnhof', crossover: 'Überleitstelle' }[p.kind] || 'Betriebsstelle';
     title = p.name;
     sub = [kindDe, p.ds100 && 'DS100 ' + p.ds100, p.uic && 'UIC ' + p.uic, p.operator].filter(Boolean).join(' · ');
+  } else if (p.quality === 'ort') {
+    title = p.name;
+    sub = p.sub || 'Ort aus OpenStreetMap';
   } else {
     title = `Strecke ${p.lineRef || view.ref} · km ${fmtKm(view.km)}`;
     sub = p.operator || 'Kilometrierung nach OpenStreetMap';
@@ -4135,6 +4265,25 @@ function setBusy(on) {
 
 async function search() {
   if (view.busy) return;
+
+  /* Steht Freitext in der Zeile, ist der erste Treffer gemeint. Liegt noch
+   * keiner vor — etwa weil der Knopf schneller war als der Dienst —, wird er
+   * hier geholt. */
+  const frei = $('#q') ? $('#q').value.trim() : '';
+  if (ortModus(frei)) {
+    if (ortTreffer.length) { trefferWaehlen(ortTreffer[0]); return; }
+    setBusy(true);
+    try {
+      clearTimeout(ortTimer);
+      await ortSuchen(frei);
+      if (ortTreffer.length) trefferWaehlen(ortTreffer[0]);
+      else toast(`Nichts zu „${frei}“ gefunden.`);
+    } finally {
+      setBusy(false);
+    }
+    return;
+  }
+
   suchZu();
 
   const ref = $('#ref').value.trim();
@@ -4282,7 +4431,10 @@ function qZerlegen(text) {
 
 /** Zeile → Felder */
 function qAufFelder() {
-  const z = qZerlegen($('#q').value);
+  const text = $('#q').value;
+  // Ein Ortsname ist keine Streckennummer -- er darf nicht im Feld stehenbleiben
+  // und spaeter mitgesucht werden.
+  const z = ortModus(text) ? { ref: '', km: '' } : qZerlegen(text);
   $('#ref').value = z.ref;
   $('#km').value = z.km;
   kmPlusZeigen();
@@ -4298,10 +4450,13 @@ function felderAufQ() {
   suchTextMerken();
 }
 
-/* Der Pfeil steht nur da, wenn es etwas zu suchen gibt. */
+/* Der Pfeil steht nur da, wenn es etwas zu suchen gibt — und die Felder für
+ * Strecke und Kilometer nur, solange es nicht nach einem Ortsnamen aussieht. */
 function suchTextMerken() {
   const s = $('#search'), q = $('#q');
-  if (s && q) s.classList.toggle('hat-text', !!q.value.trim());
+  if (!s || !q) return;
+  s.classList.toggle('hat-text', !!q.value.trim());
+  s.classList.toggle('ort', ortModus(q.value));
 }
 
 function suchAuf() { $('#search').classList.add('offen'); }
@@ -4792,17 +4947,64 @@ function pushRecent(ref, km) {
   saveStore();
 }
 
+/* Was unter der Zeile steht, hängt davon ab, was darin steht:
+ *
+ *   leer oder mit einer Ziffer beginnend → Streckennummer, also der Verlauf
+ *   sonst                                → Freitext, also Orte und Bahnhöfe
+ *
+ * Die Ziffer als Weiche ist hart, aber eindeutig: Streckennummern sind immer
+ * Zahlen, Ortsnamen fangen nie mit einer an. Wer eine Hausnummer voranstellt,
+ * bekommt die Streckensuche — dafür weiß man beim Tippen jederzeit, was
+ * gerade passiert, ohne dass die Leiste hin und her springt. */
+
+function ortModus(text) { return /[^\s\d.,+&;:\/-]/.test(text || ''); }
+
+/* Merkt sich, was gerade in der Liste steht — Enter nimmt daraus den ersten
+ * Treffer, ohne noch einmal zu fragen. */
+let ortTreffer = [];
+let ortTimer = 0;
+let ortZaehler = 0;
+let ortCtrl = null;
+
 function openSuggest() {
+  const q = $('#q');
+  const text = q ? q.value : '';
+  if (ortModus(text)) { ortSpaeter(text.trim()); return; }
+  ortAbbrechen();
+  verlaufZeigen();
+}
+
+function suggestHtml(html) {
   const box = $('#suggest');
+  box.innerHTML = html;
+  box.hidden = !html;
+}
+
+function closeSuggest() {
+  ortAbbrechen();
+  $('#suggest').hidden = true;
+}
+
+function ortAbbrechen() {
+  clearTimeout(ortTimer);
+  ortZaehler++;                     // späte Antworten laufen damit ins Leere
+  if (ortCtrl) { ortCtrl.abort(); ortCtrl = null; }
+  ortTreffer = [];
+}
+
+/* ---------- Verlauf ---------- */
+
+function verlaufZeigen() {
   const typed = $('#ref').value.trim().toLowerCase();
   const list = recent.filter(r => !typed || String(r.ref).toLowerCase().startsWith(typed)).slice(0, 6);
-  if (!list.length) { closeSuggest(); return; }
+  if (!list.length) { suggestHtml(''); return; }
 
-  box.innerHTML = list.map((r, i) =>
+  suggestHtml(list.map((r, i) =>
     `<button class="suggest-item" type="button" role="option" data-rec="${i}">
        <b>${esc(r.ref)}</b><span>km ${esc(fmtKm(r.km))}</span>
-     </button>`).join('');
-  box.querySelectorAll('[data-rec]').forEach(btn => btn.addEventListener('mousedown', ev => {
+     </button>`).join(''));
+
+  $('#suggest').querySelectorAll('[data-rec]').forEach(btn => btn.addEventListener('mousedown', ev => {
     ev.preventDefault();   // Blur des Feldes verhindern, sonst schließt die Liste zuerst
     const r = list[Number(btn.dataset.rec)];
     $('#ref').value = r.ref;
@@ -4811,10 +5013,94 @@ function openSuggest() {
     closeSuggest();
     search();
   }));
-  box.hidden = false;
 }
 
-function closeSuggest() { $('#suggest').hidden = true; }
+/* ---------- Orte und Bahnhöfe ---------- */
+
+/* Nicht bei jedem Anschlag losrennen: Getippt wird schneller, als ein Dienst
+ * antworten kann, und beide Dienste bitten um maßvolle Nutzung. */
+function ortSpaeter(text) {
+  clearTimeout(ortTimer);
+  if (text.length < 2) { ortAbbrechen(); suggestHtml(''); return; }
+  suggestHtml('<p class="suggest-info">Suche …</p>');
+  ortTimer = setTimeout(() => ortSuchen(text), 300);
+}
+
+async function ortSuchen(text) {
+  if (ortCtrl) ortCtrl.abort();
+  ortCtrl = new AbortController();
+  const sig = ortCtrl.signal;
+  const mein = ++ortZaehler;
+
+  /* Beides zugleich: Die Betriebsstelle ist in dieser App meist das Gemeinte,
+   * der Ort die Antwort darauf, wenn es keine gibt. */
+  const [stellen, orte] = await Promise.all([
+    searchFacility(text).catch(() => []),
+    searchOrt(text, sig).catch(() => [])
+  ]);
+  if (mein !== ortZaehler) return;   // inzwischen weitergetippt
+
+  ortTreffer = [
+    ...stellen.slice(0, 4).map(f => ({
+      art: 'stelle', name: f.name, lat: f.lat, lon: f.lon, roh: f,
+      sub: [{ station: 'Bahnhof', halt: 'Haltepunkt', yard: 'Bahnhofsteil', junction: 'Abzweigstelle',
+              service_station: 'Betriebsbahnhof', crossover: 'Überleitstelle' }[f.kind] || 'Betriebsstelle',
+            f.ds100 && 'DS100 ' + f.ds100, f.uic && 'UIC ' + f.uic].filter(Boolean).join(' · ')
+    })),
+    ...orte
+  ];
+
+  if (!ortTreffer.length) {
+    suggestHtml(`<p class="suggest-info">Nichts zu „${esc(text)}“ gefunden.</p>`);
+    return;
+  }
+
+  const bahn = '<svg class="s-ikon bahn" viewBox="0 0 24 24" aria-hidden="true">' +
+    '<rect x="6" y="3" width="12" height="13" rx="2.5"/><path d="M6 10h12M8.5 20l2-3.5M15.5 20l-2-3.5"/></svg>';
+  const pin = '<svg class="s-ikon" viewBox="0 0 24 24" aria-hidden="true">' +
+    '<path d="M12 21.5C7.8 16.6 5.5 13.3 5.5 10a6.5 6.5 0 1 1 13 0c0 3.3-2.3 6.6-6.5 11.5z"/>' +
+    '<circle cx="12" cy="10" r="2.3"/></svg>';
+
+  suggestHtml(ortTreffer.map((t, i) =>
+    `<button class="suggest-item s-treffer" type="button" role="option" data-tref="${i}">
+       ${t.art === 'stelle' ? bahn : pin}
+       <span class="s-text"><b>${esc(t.name)}</b><span>${esc(t.sub || '')}</span></span>
+     </button>`).join(''));
+
+  $('#suggest').querySelectorAll('[data-tref]').forEach(btn => btn.addEventListener('mousedown', ev => {
+    ev.preventDefault();
+    trefferWaehlen(ortTreffer[Number(btn.dataset.tref)]);
+  }));
+}
+
+/* Ein Treffer wird zum Punkt auf der Karte — mit derselben unteren Leiste wie
+ * alles andere, also samt Koordinate, Google-Maps-Knopf und Teilen. */
+function trefferWaehlen(t) {
+  if (!t) return;
+  closeSuggest();
+  suchZu();
+  $('#q').blur();
+
+  reihe = []; reiheAktiv = 0; reiheFehler = [];
+  view.km = null;
+  view.point = t.art === 'stelle'
+    ? { ...t.roh, quality: 'betriebsstelle' }
+    : { lat: t.lat, lon: t.lon, quality: 'ort', name: t.name, sub: t.sub };
+  gleiswegZuletzt = null;
+  if (trackLayer) trackLayer.clearLayers();
+
+  drawPoint();
+  renderBottom();
+
+  if (t.bbox) {
+    map.fitBounds(L.latLngBounds(t.bbox), { paddingTopLeft: [30, 90], paddingBottomRight: [30, 130], maxZoom: 16 });
+  } else {
+    /* Ohne Ausdehnung entscheidet die Art: eine Stadt von oben, eine Adresse
+     * so nah, dass man das Haus sieht. */
+    const z = { city: 12, town: 13, village: 14, hamlet: 15, suburb: 14, quarter: 15 }[t.typ] || 16;
+    map.setView([t.lat, t.lon], z);
+  }
+}
 
 /* ============================ Menü, Einstellungen, Link ============================ */
 
@@ -4929,6 +5215,9 @@ function bind() {
     if (ev.key === 'Escape') { ev.target.blur(); suchZu(); return; }
     if (ev.key !== 'Enter') return;
     ev.preventDefault();
+    // Bei Freitext nimmt Enter den ersten Treffer — die Liste bleibt stehen,
+    // bis er feststeht, sonst sieht man nicht, was gewählt wurde.
+    if (ortModus(ev.target.value)) { search(); return; }
     closeSuggest();
     // Steht noch kein Kilometer da, geht es dorthin weiter — wie früher von
     // Strecke nach Kilometer. Ein zweites Enter sucht dann die ganze Strecke.

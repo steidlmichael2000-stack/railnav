@@ -75,8 +75,7 @@
         <svg class="qicon" viewBox="0 0 24 24" aria-hidden="true">
           <circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.4 15.4 21 21"/>
         </svg>
-        <input id="q" type="text" inputmode="decimal" placeholder="Strecke, dann Kilometer"
-               autocomplete="off" spellcheck="false" enterkeyhint="search"
+        <input id="q" type="text" autocomplete="off" spellcheck="false" enterkeyhint="search"
                aria-label="Suche" aria-describedby="qHelp">
         <button id="go" class="go" type="button" aria-label="Suchen">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h14M12 5l7 7-7 7"/></svg>
@@ -106,7 +105,7 @@
       </div>
 
     </div>
-    <p id="qHelp" class="sr-only">Streckennummer eingeben, danach durch ein Leerzeichen getrennt den Kilometer. Beim Antippen klappen darunter eigene Felder für Strecke und Kilometer auf.</p>
+    <p id="qHelp" class="sr-only">Ort, Stadt oder Bahnhof eingeben. Beginnt die Eingabe mit einer Ziffer, wird sie als Streckennummer gelesen und darunter klappen die Felder für Strecke und Kilometer auf.</p>
     <p id="refHelp" class="sr-only">Nur die Strecke eingeben zeigt den ganzen Streckenverlauf. Ein Klick auf die Karte setzt den Kilometer.</p>
     <p id="kmHelp" class="sr-only">Mehrere Kilometer durch kaufmännisches Und oder Leerzeichen trennen — sie werden alle auf einmal gerechnet.</p>
     <div id="suggest" class="suggest" role="listbox" aria-label="Zuletzt gesucht" hidden></div>

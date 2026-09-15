@@ -212,12 +212,15 @@ body {
 
 /* Aufgeklappter Teil. Die Hoehe ist fest genug angesetzt, dass beide Felder
    samt Beschriftung hineinpassen; ueber max-height laesst sich das anders als
-   ueber auto sauber schieben. */
+   ueber auto sauber schieben.
+
+   Bei einer Ortssuche bleibt er zu: dort gibt es keinen Kilometer, und die
+   Trefferliste soll den Platz haben. */
 .detail {
   max-height: 0; opacity: 0; overflow: hidden;
   transition: max-height .2s ease, opacity .16s ease;
 }
-.search.offen .detail { max-height: 100px; opacity: 1; }
+.search.offen:not(.ort) .detail { max-height: 100px; opacity: 1; }
 
 .detail-in {
   display: flex; align-items: stretch; gap: 2px;
@@ -365,6 +368,23 @@ body {
 .suggest-item b { font-weight: 650; font-variant-numeric: tabular-nums; }
 .suggest-item span { color: var(--muted); font-size: .82rem; }
 .suggest-item .tail { margin-left: auto; color: var(--muted-2); font-size: .74rem; }
+
+/* Ort oder Betriebsstelle -- das Zeichen links sagt, was einen beim Antippen
+   erwartet: eine Ortschaft auf der Karte oder ein Bahnhof mit DS100. */
+.suggest-item .s-ikon {
+  flex: none; width: 17px; height: 17px; align-self: center;
+  fill: none; stroke: var(--muted); stroke-width: 1.8;
+  stroke-linecap: round; stroke-linejoin: round;
+}
+.suggest-item .s-ikon.bahn { stroke: var(--accent); }
+.s-treffer { align-items: center; }
+.suggest-item .s-text {
+  min-width: 0; display: flex; flex-direction: column; gap: 1px;
+  color: var(--text); font-size: .92rem;
+}
+.suggest-item .s-text span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.suggest-info { margin: 0; padding: 9px 11px; color: var(--muted); font-size: .84rem; }
 
 /* ---------- Menü ---------- */
 

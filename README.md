@@ -59,15 +59,33 @@ am Rechner und lässt sich als App auf den Startbildschirm legen.
 - **Das Gleisnetz liegt bei.** Welche Strecke an einer Stelle liegt und wie das Gleis dort
   verläuft, beantwortet die App aus mitgelieferten Kacheln statt über eine Fremdabfrage —
   gemessen 18 ms statt Sekunden, und es geht ohne Netz.
+- **Freitextsuche** in derselben Zeile — Betriebsstellen, Ortschaften, Straßen und Adressen,
+  bevorzugt in der Nähe des gerade gezeigten Kartenausschnitts.
 - **Offlinefähig** — die App selbst und bereits geladene Kartenkacheln bleiben ohne Netz nutzbar.
 
-**Oben steht nur eine Zeile.** Erst wenn sie angetippt wird, klappen darunter die beiden Felder
-*Strecke* und *Kilometer* auf; ein Tipp daneben oder eine fertige Suche faltet sie wieder
-zusammen, damit von der Karte so wenig wie möglich verdeckt bleibt. Was in der Zeile steht, wird
-sofort in die beiden Felder zerlegt — `5100 12,5` → Strecke 5100, km 12,5 — und eine Änderung in
-einem Feld schreibt sich in die Zeile zurück. Auf dem Handy ist der Weg über die Felder der
-eigentliche: Der Zahlenblock hat keine Leertaste, mit der sich beides in einer Zeile trennen
-ließe. Enter in der Zeile springt deshalb weiter ins Kilometerfeld; ein zweites Enter sucht.
+**Oben steht nur eine Zeile**, und sie nimmt alles entgegen. Was darin steht, entscheidet, was
+passiert:
+
+- **Ein Name** — `Zapfendorf`, `Ebing`, `Ludwigstraße Bamberg` — sucht Betriebsstellen und Orte.
+  Betriebsstellen stehen oben, mit DS100 und UIC; darunter Ortschaften, Straßen und Adressen.
+  Ein Tipp setzt den Punkt auf die Karte, mit derselben unteren Leiste wie alles andere — samt
+  Koordinate, Google Maps, Route und Teilen. Die Treffer werden nach der Kartenmitte sortiert:
+  Wer an der Strecke steht und `Ebing` tippt, meint das Ebing vor sich.
+- **Eine Ziffer am Anfang** liest die Zeile als Streckennummer. Dann klappen darunter die beiden
+  Felder *Strecke* und *Kilometer* auf, gefüllt aus dem, was in der Zeile steht — `5100 12,5`
+  → Strecke 5100, km 12,5. Eine Änderung im Feld schreibt sich in die Zeile zurück.
+
+Auf dem Handy ist der Weg über die beiden Felder der eigentliche: Der Zahlenblock hat keine
+Leertaste, mit der sich Strecke und Kilometer in einer Zeile trennen ließen. Enter in der Zeile
+springt deshalb weiter ins Kilometerfeld; ein zweites Enter sucht. Bei einem Namen nimmt Enter
+gleich den ersten Treffer.
+
+Ein Tipp neben die Leiste oder eine fertige Suche faltet alles wieder zu einer Zeile zusammen,
+damit von der Karte so wenig wie möglich verdeckt bleibt.
+
+Die Ortssuche läuft über [Photon](https://photon.komoot.io/) und weicht auf Nominatim aus, wenn
+Photon nicht antwortet — beides OpenStreetMap-Daten, beides nur mit Netz. Die Betriebsstellen
+kommen wie bisher über die OpenRailwayMap-API; die eigene Suche dafür steht weiterhin im Menü.
 
 Eingabe: `12,5` oder `12.5`, auch Hektometer-Schreibweise `14+250` (= km 14,250).
 Nur die Streckennummer ohne Kilometer zeigt den Streckenverlauf.

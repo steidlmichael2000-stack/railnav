@@ -5,7 +5,7 @@
  * neue Version sofort ankommt statt hinter einem alten Cache zu hängen.
  */
 
-const VERSION = 'v24';
+const VERSION = 'v25';
 const SHELL = `trackpilot-shell-${VERSION}`;
 const TILES = `trackpilot-tiles-${VERSION}`;
 const DATA = `trackpilot-data-${VERSION}`;
