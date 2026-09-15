@@ -184,7 +184,46 @@ body {
 
 /* ---------- Suchzeile ---------- */
 
-.search { display: flex; align-items: stretch; gap: 2px; padding: 6px; }
+/* Die obere Leiste ist im Ruhezustand nur eine Zeile. Die Aufteilung in Strecke
+   und Kilometer klappt erst auf, wenn man die Zeile antippt -- und faellt danach
+   wieder zusammen, damit von der Karte moeglichst wenig verdeckt bleibt. */
+
+.search { padding: 6px; }
+
+.qrow { display: flex; align-items: center; gap: 4px; }
+
+.qicon {
+  flex: none; width: 19px; height: 19px; margin: 0 2px 0 8px;
+  fill: none; stroke: var(--muted-2); stroke-width: 2; stroke-linecap: round;
+}
+.search.offen .qicon { stroke: var(--accent); }
+
+#q {
+  flex: 1 1 auto; min-width: 0;
+  padding: 11px 2px; border: none; background: none; outline: none;
+  font: inherit; font-size: 1.06rem; font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+#q::placeholder { color: var(--muted-2); font-weight: 500; opacity: 1; }
+
+/* Der Pfeil steht nur da, wenn es etwas zu suchen gibt. */
+.search:not(.hat-text) .go { display: none; }
+
+/* Aufgeklappter Teil. Die Hoehe ist fest genug angesetzt, dass beide Felder
+   samt Beschriftung hineinpassen; ueber max-height laesst sich das anders als
+   ueber auto sauber schieben. */
+.detail {
+  max-height: 0; opacity: 0; overflow: hidden;
+  transition: max-height .2s ease, opacity .16s ease;
+}
+.search.offen .detail { max-height: 100px; opacity: 1; }
+
+.detail-in {
+  display: flex; align-items: stretch; gap: 2px;
+  margin-top: 6px; padding-top: 7px;
+  border-top: 1px solid var(--line);
+}
 
 .field { position: relative; flex: 1 1 0; min-width: 0; padding: 4px 10px 5px; border-radius: 2px; }
 .field:focus-within { background: var(--panel-2); }
@@ -224,12 +263,12 @@ body {
   border: none; cursor: pointer;
   border-radius: 2px;
 }
-.go { width: 50px; background: var(--accent); color: var(--accent-ink); }
+.go { width: 44px; height: 40px; background: var(--accent); color: var(--accent-ink); }
 .go svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
 .go:active { filter: brightness(.9); }
 .go.busy { pointer-events: none; opacity: .65; }
 
-.more { width: 40px; background: none; color: var(--muted); }
+.more { width: 38px; height: 40px; background: none; color: var(--muted); }
 .more svg { width: 20px; height: 20px; fill: currentColor; }
 .more:active, .more.is-on { color: var(--accent); }
 
@@ -776,7 +815,9 @@ html[data-theme="light"] .bb-actions .maps { color: #fff; }
 @media (max-width: 380px) {
   .field label { font-size: .6rem; }
   .field input { font-size: 1.02rem; }
-  .go { width: 44px; }
+  #q { font-size: 1rem; }
+  .go { width: 40px; }
+  .more { width: 34px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

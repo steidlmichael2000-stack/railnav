@@ -64,28 +64,49 @@
 
   <!-- ---------- obere Leiste ---------- -->
   <div class="bar bar-top">
-    <div class="search">
-      <div class="field field-ref">
-        <label for="ref">Strecke</label>
-        <input id="ref" type="text" inputmode="numeric" placeholder="5100" autocomplete="off"
-               spellcheck="false" enterkeyhint="next" aria-describedby="refHelp">
+    <!-- Oben steht nur eine Zeile. Erst wenn sie angetippt wird, klappt darunter
+         die Aufteilung in Strecke und Kilometer auf: im Gelaende tippt man meist
+         nur die Streckennummer, und die zweite Zeile nimmt bis dahin bloss Platz
+         und Aufmerksamkeit weg. Was in die eine Zeile getippt wird, steht
+         zerlegt sofort in den beiden Feldern -- und umgekehrt. -->
+    <div id="search" class="search">
+
+      <div class="qrow">
+        <svg class="qicon" viewBox="0 0 24 24" aria-hidden="true">
+          <circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.4 15.4 21 21"/>
+        </svg>
+        <input id="q" type="text" inputmode="decimal" placeholder="Strecke, dann Kilometer"
+               autocomplete="off" spellcheck="false" enterkeyhint="search"
+               aria-label="Suche" aria-describedby="qHelp">
+        <button id="go" class="go" type="button" aria-label="Suchen">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h14M12 5l7 7-7 7"/></svg>
+        </button>
+        <button id="menuBtn" class="more" type="button" aria-label="Mehr" aria-expanded="false" aria-controls="sheet">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>
+        </button>
       </div>
-      <div class="field field-km">
-        <label for="km">Kilometer</label>
-        <input id="km" type="text" inputmode="decimal" placeholder="12,5" autocomplete="off"
-               spellcheck="false" enterkeyhint="search" aria-describedby="kmHelp">
-        <!-- Der Zahlenblock des Handys hat weder & noch Leertaste — deshalb hängt
-             dieser Knopf den Trenner an, statt die Tastatur umzuschalten. -->
-        <button id="kmPlus" class="kmplus" type="button" hidden
-                aria-label="Weiteren Kilometer anhängen">&amp;</button>
+
+      <div id="detail" class="detail">
+        <div class="detail-in">
+          <div class="field field-ref">
+            <label for="ref">Strecke</label>
+            <input id="ref" type="text" inputmode="numeric" placeholder="5100" autocomplete="off"
+                   spellcheck="false" enterkeyhint="next" aria-describedby="refHelp">
+          </div>
+          <div class="field field-km">
+            <label for="km">Kilometer</label>
+            <input id="km" type="text" inputmode="decimal" placeholder="12,5" autocomplete="off"
+                   spellcheck="false" enterkeyhint="search" aria-describedby="kmHelp">
+            <!-- Der Zahlenblock des Handys hat weder & noch Leertaste — deshalb hängt
+                 dieser Knopf den Trenner an, statt die Tastatur umzuschalten. -->
+            <button id="kmPlus" class="kmplus" type="button" hidden
+                    aria-label="Weiteren Kilometer anhängen">&amp;</button>
+          </div>
+        </div>
       </div>
-      <button id="go" class="go" type="button" aria-label="Suchen">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h14M12 5l7 7-7 7"/></svg>
-      </button>
-      <button id="menuBtn" class="more" type="button" aria-label="Mehr" aria-expanded="false" aria-controls="sheet">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>
-      </button>
+
     </div>
+    <p id="qHelp" class="sr-only">Streckennummer eingeben, danach durch ein Leerzeichen getrennt den Kilometer. Beim Antippen klappen darunter eigene Felder für Strecke und Kilometer auf.</p>
     <p id="refHelp" class="sr-only">Nur die Strecke eingeben zeigt den ganzen Streckenverlauf. Ein Klick auf die Karte setzt den Kilometer.</p>
     <p id="kmHelp" class="sr-only">Mehrere Kilometer durch kaufmännisches Und oder Leerzeichen trennen — sie werden alle auf einmal gerechnet.</p>
     <div id="suggest" class="suggest" role="listbox" aria-label="Zuletzt gesucht" hidden></div>

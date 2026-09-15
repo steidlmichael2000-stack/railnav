@@ -61,6 +61,14 @@ am Rechner und lässt sich als App auf den Startbildschirm legen.
   gemessen 18 ms statt Sekunden, und es geht ohne Netz.
 - **Offlinefähig** — die App selbst und bereits geladene Kartenkacheln bleiben ohne Netz nutzbar.
 
+**Oben steht nur eine Zeile.** Erst wenn sie angetippt wird, klappen darunter die beiden Felder
+*Strecke* und *Kilometer* auf; ein Tipp daneben oder eine fertige Suche faltet sie wieder
+zusammen, damit von der Karte so wenig wie möglich verdeckt bleibt. Was in der Zeile steht, wird
+sofort in die beiden Felder zerlegt — `5100 12,5` → Strecke 5100, km 12,5 — und eine Änderung in
+einem Feld schreibt sich in die Zeile zurück. Auf dem Handy ist der Weg über die Felder der
+eigentliche: Der Zahlenblock hat keine Leertaste, mit der sich beides in einer Zeile trennen
+ließe. Enter in der Zeile springt deshalb weiter ins Kilometerfeld; ein zweites Enter sucht.
+
 Eingabe: `12,5` oder `12.5`, auch Hektometer-Schreibweise `14+250` (= km 14,250).
 Nur die Streckennummer ohne Kilometer zeigt den Streckenverlauf.
 

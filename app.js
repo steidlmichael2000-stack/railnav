@@ -3737,6 +3737,7 @@ async function useLineAt(ref, seeds, lat, lon) {
   try {
     view.ref = ref;
     $('#ref').value = ref;
+    felderAufQ();
 
     const liste = Array.isArray(seeds) ? seeds.slice() : (seeds == null ? [] : [{ km: seeds }]);
     if (!liste.length) {
@@ -3859,6 +3860,7 @@ function applyPoint(ref, km, result) {
   $('#ref').value = ref;
   $('#km').value = fmtKm(km);
   kmPlusZeigen();
+  felderAufQ();
 
   drawPoint();
   drawMilestones();
@@ -4133,7 +4135,7 @@ function setBusy(on) {
 
 async function search() {
   if (view.busy) return;
-  closeSuggest();
+  suchZu();
 
   const ref = $('#ref').value.trim();
   const kmRaw = $('#km').value.trim();
@@ -4254,6 +4256,61 @@ function kmPlusZeigen() {
   el.style.paddingRight = k.hidden ? '' : '26px';
 }
 
+/* ====================== Eine Zeile oben, zwei Felder darunter ======================
+ *
+ * Getippt wird in eine einzige Zeile — so, wie ein Achspunkt auf dem Zettel
+ * steht: erst die Strecke, dann der Kilometer. Was dort steht, wird sofort in
+ * die beiden Felder zerlegt, die darunter aufklappen, sobald die Zeile
+ * angetippt wird. Beides bleibt aneinander gebunden: eine Änderung im Feld
+ * schreibt sich in die Zeile zurück.
+ *
+ * Der Umweg über die Felder ist auf dem Handy kein Luxus, sondern der
+ * eigentliche Weg: der Zahlenblock hat keine Leertaste, mit der sich Strecke
+ * und Kilometer in einer Zeile trennen ließen. Getippt wird also die Strecke,
+ * dann tippt man ins Kilometerfeld — die Zeile fasst beides trotzdem zusammen
+ * und lässt sich am Rechner oder aus der Zwischenablage auch am Stück füllen. */
+
+function qZerlegen(text) {
+  const t = String(text || '').trim();
+  if (!t) return { ref: '', km: '' };
+  // Streckennummer vorn, danach durch Leerzeichen (oder das Wort km) getrennt alles Weitere
+  let m = t.match(/^(\d{1,6})(?:\s*km\b\.?)?(?:\s+([\s\S]*))?$/i);
+  if (!m) m = t.match(/^(\d{1,6})\s*[,;:\/]\s*([\s\S]+)$/);
+  if (!m) return { ref: t, km: '' };
+  return { ref: m[1], km: (m[2] || '').trim() };
+}
+
+/** Zeile → Felder */
+function qAufFelder() {
+  const z = qZerlegen($('#q').value);
+  $('#ref').value = z.ref;
+  $('#km').value = z.km;
+  kmPlusZeigen();
+  suchTextMerken();
+}
+
+/** Felder → Zeile. Überall aufrufen, wo ein Treffer die Felder nachzieht. */
+function felderAufQ() {
+  const ref = $('#ref').value.trim();
+  const km = $('#km').value.trim();
+  const el = $('#q');
+  if (el) el.value = [ref, km].filter(Boolean).join(' ');
+  suchTextMerken();
+}
+
+/* Der Pfeil steht nur da, wenn es etwas zu suchen gibt. */
+function suchTextMerken() {
+  const s = $('#search'), q = $('#q');
+  if (s && q) s.classList.toggle('hat-text', !!q.value.trim());
+}
+
+function suchAuf() { $('#search').classList.add('offen'); }
+
+function suchZu() {
+  $('#search').classList.remove('offen');
+  closeSuggest();
+}
+
 function fitLine(e) {
   const pts = e.sorted.map(p => [p.lat, p.lon]);
   if (!pts.length) return;
@@ -4280,6 +4337,7 @@ async function runFacility() {
       view.km = null;
       view.point = { ...f, quality: 'betriebsstelle' };
       $('#km').value = '';
+      felderAufQ();
       drawPoint();
       renderBottom();
       map.setView([f.lat, f.lon], 16);
@@ -4749,6 +4807,7 @@ function openSuggest() {
     const r = list[Number(btn.dataset.rec)];
     $('#ref').value = r.ref;
     $('#km').value = fmtKm(r.km);
+    felderAufQ();
     closeSuggest();
     search();
   }));
@@ -4760,6 +4819,7 @@ function closeSuggest() { $('#suggest').hidden = true; }
 /* ============================ Menü, Einstellungen, Link ============================ */
 
 function openSheet() {
+  suchZu();
   $('#sheet').hidden = false;
   $('#menuBtn').classList.add('is-on');
   $('#menuBtn').setAttribute('aria-expanded', 'true');
@@ -4837,6 +4897,7 @@ function readHash() {
     const werte = kmTokens(k).map(toKm);
     $('#km').value = werte.length && werte.every(isFinite) ? werte.map(fmtKm).join(' & ') : k;
   }
+  felderAufQ();
   return true;
 }
 
@@ -4860,25 +4921,51 @@ function bind() {
   on('#go', 'click', search);
   on('#menuBtn', 'click', () => $('#sheet').hidden ? openSheet() : closeSheet());
 
+  /* Die eine Zeile oben. Antippen klappt die Felder auf, Tippen zerlegt den
+   * Text sofort in Strecke und Kilometer. */
+  on('#q', 'focus', () => { suchAuf(); openSuggest(); });
+  on('#q', 'input', () => { qAufFelder(); openSuggest(); });
+  on('#q', 'keydown', ev => {
+    if (ev.key === 'Escape') { ev.target.blur(); suchZu(); return; }
+    if (ev.key !== 'Enter') return;
+    ev.preventDefault();
+    closeSuggest();
+    // Steht noch kein Kilometer da, geht es dorthin weiter — wie früher von
+    // Strecke nach Kilometer. Ein zweites Enter sucht dann die ganze Strecke.
+    if (!$('#km').value.trim()) { suchAuf(); $('#km').focus(); return; }
+    ev.target.blur();
+    search();
+  });
+
+  /* Aufgeklappter Teil: bleibt offen, solange darin gearbeitet wird, und
+   * schließt erst bei einem Tipp daneben — nicht schon beim Verlieren des
+   * Fokus, sonst rutscht der &-Knopf unter dem Finger weg, der ihn drückt. */
+  on('#search', 'focusin', suchAuf);
+  document.addEventListener('pointerdown', ev => {
+    const bar = document.querySelector('.bar-top');
+    if (bar && !bar.contains(ev.target)) suchZu();
+  }, true);
+
   on('#ref', 'keydown', ev => {
     if (ev.key === 'Enter') { ev.preventDefault(); closeSuggest(); $('#km').focus(); }
     if (ev.key === 'Escape') closeSuggest();
   });
   on('#ref', 'focus', openSuggest);
-  on('#ref', 'input', openSuggest);
+  on('#ref', 'input', () => { felderAufQ(); openSuggest(); });
   on('#ref', 'blur', () => setTimeout(closeSuggest, 120));
 
   on('#km', 'keydown', ev => {
     if (ev.key === 'Enter') { ev.preventDefault(); search(); ev.target.blur(); }
   });
   on('#km', 'focus', closeSuggest);
-  on('#km', 'input', kmPlusZeigen);
+  on('#km', 'input', () => { kmPlusZeigen(); felderAufQ(); });
   on('#kmPlus', 'click', () => {
     const el = $('#km');
     el.value = el.value.replace(/[&;\s]+$/, '') + ' & ';
     el.focus();
     el.setSelectionRange(el.value.length, el.value.length);
     kmPlusZeigen();
+    felderAufQ();
   });
   kmPlusZeigen();
 
@@ -5014,6 +5101,7 @@ function boot() {
   if (readHash()) search();
   else if (recent[0]) $('#ref').value = recent[0].ref;
   kmPlusZeigen();
+  felderAufQ();
 
   if ('serviceWorker' in navigator && window.isSecureContext) {
     navigator.serviceWorker.register('sw.js').catch(() => { /* Offlinebetrieb ist optional */ });
