@@ -1,8 +1,9 @@
 {
-  "name": "Railnav — Streckenkilometer verorten",
-  "short_name": "Railnav",
+  "name": "TrackPilot — Streckenkilometer verorten",
+  "short_name": "TrackPilot",
   "description": "Streckennummer und Kilometer eingeben, Position auf der Karte sehen und in Google Maps öffnen.",
   "lang": "de",
+  "id": "/trackpilot/",
   "start_url": ".",
   "scope": ".",
   "display": "standalone",

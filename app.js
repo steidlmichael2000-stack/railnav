@@ -1,4 +1,4 @@
-/* Railnav — Streckenkilometer auf der Karte
+/* TrackPilot — Streckenkilometer auf der Karte
  *
  * Zwei Richtungen:
  *   Strecke + km  → Position   (OpenRailwayMap-API, dazwischen wird interpoliert)
@@ -91,7 +91,10 @@ const LIVE_MIN_WEG = 5;
  * Aus den Kacheln lassen sich die Punkte ohnehin der Strecke zuordnen, auf der
  * sie stehen; damit ist der weite Radius unbedenklich. */
 const SEED_RADIUS = 12000;
-const STORE_KEY = 'railnav.v3';
+const STORE_KEY = 'trackpilot.v3';
+/* Vorgaengername der App. Wird beim ersten Start uebernommen, damit
+ * Einstellungen und Verlauf die Umbenennung ueberleben. */
+const STORE_KEY_ALT = 'railnav.v3';
 
 /* Mehrere Instanzen, weil einzelne zeitweise ausfallen: Die Hauptinstanz war
  * zwischenzeitlich aus dem Testnetz gar nicht erreichbar (HTTP 406), kumi hat
@@ -1896,6 +1899,9 @@ function wmsLogin() {
  *
  * Die Dateien bleiben auf dem Gerät, es wird nichts hochgeladen. */
 
+/* Bewusst beim alten Namen belassen: die Datenbank haengt am Origin, nicht am
+ * Pfad. Ein neuer Name wuerde die bereits importierten KML-Dateien verwaisen
+ * lassen, ohne dass der Nutzer etwas davon haette. */
 const KML_DB = 'railnav-kml';
 /* Reihum vergeben, damit sich mehrere Dateien ohne eigene Farbangabe
  * voneinander unterscheiden. */
@@ -4707,7 +4713,8 @@ function liveLeiste() {
 
 function loadStore() {
   try {
-    const raw = JSON.parse(localStorage.getItem(STORE_KEY) || '{}');
+    const roh = localStorage.getItem(STORE_KEY) || localStorage.getItem(STORE_KEY_ALT);
+    const raw = JSON.parse(roh || '{}');
     const wms = { ...prefs.wms, ...((raw.prefs && raw.prefs.wms) || {}) };
     prefs = { ...prefs, ...(raw.prefs || {}), wms };
     recent = Array.isArray(raw.recent) ? raw.recent : [];
@@ -4715,7 +4722,10 @@ function loadStore() {
 }
 
 function saveStore() {
-  try { localStorage.setItem(STORE_KEY, JSON.stringify({ prefs, recent })); } catch { /* voll oder gesperrt */ }
+  try {
+    localStorage.setItem(STORE_KEY, JSON.stringify({ prefs, recent }));
+    localStorage.removeItem(STORE_KEY_ALT);   // ab jetzt nur noch der neue Schluessel
+  } catch { /* voll oder gesperrt */ }
 }
 
 function pushRecent(ref, km) {
@@ -4836,7 +4846,7 @@ async function share() {
     ? `Strecke ${view.ref} · ${reihe.length} Kilometer`
     : view.point && view.km != null
       ? `Strecke ${view.ref} km ${fmtKm(view.km)}`
-      : 'Railnav';
+      : 'TrackPilot';
   if (navigator.share) {
     try { await navigator.share({ title, text: title, url }); return; }
     catch { /* abgebrochen — dann kopieren */ }

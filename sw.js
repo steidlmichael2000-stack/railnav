@@ -1,16 +1,21 @@
-/* Railnav — Service Worker
+/* TrackPilot — Service Worker
  *
  * Ziel: Die App startet auch ohne Netz, und bereits angesehene Kartenkacheln
  * bleiben sichtbar. Für alles Eigene gilt "erst Netz, dann Cache", damit eine
  * neue Version sofort ankommt statt hinter einem alten Cache zu hängen.
  */
 
-const VERSION = 'v21';
-const SHELL = `railnav-shell-${VERSION}`;
-const TILES = `railnav-tiles-${VERSION}`;
-const DATA = `railnav-data-${VERSION}`;
-const NETZ = `railnav-netz-${VERSION}`;
+const VERSION = 'v22';
+const SHELL = `trackpilot-shell-${VERSION}`;
+const TILES = `trackpilot-tiles-${VERSION}`;
+const DATA = `trackpilot-data-${VERSION}`;
+const NETZ = `trackpilot-netz-${VERSION}`;
 const KEEP = [SHELL, TILES, DATA, NETZ];
+
+/* Die App hiess bis zur Umbenennung "Railnav" und lag unter /railnav/. Die
+ * Caches von damals liegen auf derselben Herkunft und wuerden sonst ewig
+ * liegenbleiben - deshalb wird der alte Praefix hier mit aufgeraeumt. */
+const ALT_PRAEFIX = 'railnav-';
 
 const SHELL_FILES = [
   './', 'index.html', 'style.css', 'app.js',
@@ -40,7 +45,9 @@ self.addEventListener('install', event => {
 self.addEventListener('activate', event => {
   event.waitUntil((async () => {
     const names = await caches.keys();
-    await Promise.all(names.filter(n => n.startsWith('railnav-') && !KEEP.includes(n)).map(n => caches.delete(n)));
+    await Promise.all(names
+      .filter(n => (n.startsWith('trackpilot-') || n.startsWith(ALT_PRAEFIX)) && !KEEP.includes(n))
+      .map(n => caches.delete(n)));
     await self.clients.claim();
   })());
 });
